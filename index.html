@@ -1,4 +1,26 @@
-<!DOCTYPE html>
+const skuToFamily = new Map();
+        const ratioBySku = new Map();
+        reservationsAgg.forEach(x => {
+          const s = String(x.skuName || '').toLowerCase();
+          if (s && x.family && String(x.family).toLowerCase() !== 'na') skuToFamily.set(s, x.family);
+          if (s) ratioBySku.set(s, Number(x.ratio || 1));
+        });
+        const keyFor = (sku, family) => {
+          if (!familyMode) return sku;
+          const fam = (family && String(family).toLowerCase() !== 'na') ? family : skuToFamily.get(String(sku).toLowerCase());
+          return fam || sku;
+        };const byRes = new Map();
+          rows.forEach(item => {
+            const p = item.properties || {};
+            const rid = p.reservationId?.split('/').pop();
+            if (!rid || !allowedResIds.has(rid)) return;
+            const entry = byRes.get(rid) || { usedHours: 0, days: 0, reservedQty: 0, skuName: p.skuName, ifg: p.instanceFlexibilityGroup, ifgRatio: Number(p.instanceFlexibilityRatio || 1) };
+            entry.usedHours += Number(p.usedHours || 0);
+            entry.days += 1;
+            entry.reservedQty = Math.max(entry.reservedQty, Number(p.totalReservedQuantity || 0));
+            if (p.instanceFlexibilityRatio) entry.ifgRatio = Number(p.instanceFlexibilityRatio);
+            byRes.set(rid, entry);
+          });<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -78,8 +100,9 @@
       </div>
       <div class="row" style="margin-top:10px">
         <button class="btn btn-primary" id="btnConnect">Connect to Azure</button>
-        <button class="btn btn-secondary" id="btnSample">Load Sample Data</button>
-        <label class="toggle"><input type="checkbox" id="familyMode" checked /> Use family (instance flexibility) where possible</label>
+        <button class="btn btn-secondary" id="btnSample">Load Sample Data<\/button>
+        <label class="toggle"><input type="checkbox" id="familyMode" checked \/> Use family (instance flexibility) where possible<\/label>
+        <label class="toggle"><input type="checkbox" id="runningOnly" checked \/> Running VMs only<\/label>
       </div>
       <div class="config-grid" style="margin-top:10px">
         <div class="input-group">
@@ -93,6 +116,7 @@
         </div>
       </div>
       <div id="authStatus" class="status info">Loading…</div>
+      <details style="margin-top:8px"><summary>Debug (counts)</summary><pre id="debugOut" style="white-space:pre-wrap"></pre></details>
     </div>
 
     <div id="dashboard" class="dashboard">
@@ -371,7 +395,7 @@
           for (const [rid, v] of byRes) {
             const meta = reservationMeta.get(rid) || {};
             const avgUsed = v.days ? (v.usedHours / (24 * v.days)) : 0;
-            reservationsAgg.push({ reservationId: rid, region: meta.region, skuName: meta.skuName || v.skuName, reservedQty: v.reservedQty, avgUsed, family: v.ifg });
+            reservationsAgg.push({ reservationId: rid, region: meta.region, skuName: meta.skuName || v.skuName, reservedQty: v.reservedQty, avgUsed, family: v.ifg, ratio: v.ifgRatio });
           }
         }
 
@@ -379,9 +403,12 @@
         showStatus('Querying Resource Graph for VMs…', 'info');
         const subs = azureConfig.subscriptions; // can be empty => tenant scope (needs extra perms)
 
+        const runningOnly = document.getElementById('runningOnly')?.checked ?? true;
         const kql = `Resources
 | where type =~ 'microsoft.compute/virtualmachines'
-| extend vmSize = tostring(properties.hardwareProfile.vmSize)
+| extend vmSize = tostring(properties.hardwareProfile.vmSize)` + (runningOnly ? `
+| extend state = tostring(properties.extended.instanceView.powerState.code)
+| where state =~ 'PowerState/running'` : ``) + `
 | summarize running = count() by region = tolower(location), vmSize`;
 
         let targetSubs = subs;
@@ -416,6 +443,12 @@
           key: familyMode ? toFamily(x.skuName) : x.skuName
         }));
 
+        // Normalize running to IFG units when family mode is on
+        try {
+          const rk = Array.isArray(runningKeyed) ? runningKeyed : [];
+          rk.forEach(r => { r.norm = familyMode ? ((ratioBySku.get(String(r.skuName).toLowerCase()) || 1) * r.running) : r.running; });
+        } catch(e) { console.warn('norm calc skipped', e); }
+
         // 6) Build unified matrix by region+key
         const index = new Map();
         const upsert = (region, key, obj) => {
@@ -425,7 +458,7 @@
         };
 
         reservations.forEach(r => upsert(r.region, r.key, { reserved: r.reservedQty, avgUsed: r.avgUsed }));
-        runningKeyed.forEach(r => upsert(r.region, r.key, { running: r.running }));
+        runningKeyed.forEach(r => upsert(r.region, r.key, { running: (r.norm ?? r.running) }));
 
         // 7) Convert to array of rows
         const rows = Array.from(index.values()).sort((a,b) => (a.region+a.key).localeCompare(b.region+b.key));
@@ -486,6 +519,30 @@
       });
 
       document.getElementById('dashboard').classList.add('active');
+
+      // Debug output
+      try {
+        const dbg = [];
+        if (payload.rawReservations) {
+          const totalRes = payload.rawReservations.reduce((s,x)=>s + (Number(x.reservedQty)||0),0);
+          const fams = new Set(payload.rawReservations.map(x=>x.family||'')).size;
+          dbg.push(`reservationsAgg: ${payload.rawReservations.length} rows, totalReserved(sum): ${totalRes}`);
+          dbg.push(`distinct IFG families: ${fams}`);
+        }
+        if (payload.rawRunning) {
+          const totalRun = payload.rawRunning.reduce((s,x)=>s + (Number(x.running)||0),0);
+          dbg.push(`ARG raw rows: ${payload.rawRunning.length}, total VM count: ${totalRun}`);
+        }
+        const cc = rows.filter(r=>/canada ?central/i.test(r.region));
+        if (cc.length) {
+          const top = cc.sort((a,b)=>b.reserved-a.reserved).slice(0,5).map(r=>`${r.region} | ${r.vmKey} -> reserved ${r.reserved}, avgUsed ${r.avgUsed}, count ${r.running}`);
+          dbg.push('Top Canada Central rows by reserved:
+' + top.join('
+'));
+        }
+        const out = document.getElementById('debugOut'); if (out) out.textContent = dbg.join('
+');
+      } catch(e) { /* ignore */ }
     }
 
     function recommend(r) {
