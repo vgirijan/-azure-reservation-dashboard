@@ -85,12 +85,12 @@
       <div class="config-grid" style="margin-top:10px">
         <div class="input-group">
           <label for="scopeFilter">Reservation scope filter</label>
-          <input type=\"text\" id="scopeFilter" placeholder="e.g., Single subscription - Jonas Enterprise" />
+          <input type="text" id="scopeFilter" placeholder="e.g., Single subscription - Jonas Enterprise" />
           <div class="hint">Exact match, case-insensitive. Leave blank to include all scopes.</div>
         </div>
         <div class="input-group">
           <label>&nbsp;</label>
-          <label class="toggle"><input type=\"checkbox\" id="statusFilterSucceeded" checked /> Succeeded reservations only</label>
+          <label class="toggle"><input type="checkbox" id="statusFilterSucceeded" checked /> Succeeded reservations only</label>
         </div>
       </div>
       <div id="authStatus" class="status info">Loading…</div>
@@ -403,6 +403,8 @@
         reservationsAgg.forEach(x => {
           if (x.skuName && x.family) skuToFamily.set(String(x.skuName).toLowerCase(), x.family);
         });
+        const ratioBySku = new Map();
+        reservationsAgg.forEach(x => { const s = String(x.skuName || '').toLowerCase(); if (s) ratioBySku.set(s, Number(x.ratio || 1)); });
         const keyFor = (sku, family) => {
           if (!familyMode) return sku;
           // Prefer the explicit family from details; else only map if we have a known sku->family from the tenant
@@ -513,11 +515,9 @@
         if (cc.length) {
           const top = cc.sort((a,b)=>b.reserved-a.reserved).slice(0,5).map(r=>`${r.region} | ${r.vmKey} -> reserved ${r.reserved}, avgUsed ${r.avgUsed}, count ${r.running}`);
           dbg.push(`Top Canada Central rows by reserved:
-${top.join('
-')}`);
+${top.join('\n')}`);
         }
-        const out = document.getElementById('debugOut'); if (out) out.textContent = dbg.join('
-');
+        const out = document.getElementById('debugOut'); if (out) out.textContent = dbg.join('\n');
       } catch(e) { /* ignore */ }
     }
 
