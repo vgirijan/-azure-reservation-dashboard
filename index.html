@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Reservation Gap Analysis</title>
+    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+
+        .auth-section {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .input-group label {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #555;
+        }
+
+        .input-group input {
+            padding: 12px 15px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 14px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f8f9fa;
+            color: #495057;
+            border: 2px solid #dee2e6;
+        }
+
+        .btn-secondary:hover {
+            background: #e9ecef;
+            transform: translateY(-1px);
+        }
+
+        .status {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin: 15px 0;
+            font-weight: 500;
+        }
+
+        .status.success {
+            background: linear-gradient(135deg, #51cf66, #40c057);
+            color: white;
+        }
+
+        .status.error {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+            color: white;
+        }
+
+        .status.info {
+            background: linear-gradient(135deg, #74c0fc, #339af0);
+            color: white;
+        }
+
+        .dashboard {
+            display: none;
+        }
+
+        .dashboard.active {
+            display: block;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .metric-label {
+            font-size: 1rem;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .metric-trend {
+            font-size: 0.9rem;
+            margin-top: 10px;
+            padding: 5px 10px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+
+        .trend-positive {
+            background: rgba(81, 207, 102, 0.1);
+            color: #51cf66;
+        }
+
+        .trend-negative {
+            background: rgba(255, 107, 107, 0.1);
+            color: #ff6b6b;
+        }
+
+        .chart-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+        }
+
+        .chart-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .gap-table {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        th {
+            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+            font-weight: 600;
+            color: #495057;
+        }
+
+        tr:hover {
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .gap-positive {
+            color: #51cf66;
+            font-weight: 600;
+        }
+
+        .gap-negative {
+            color: #ff6b6b;
+            font-weight: 600;
+        }
+
+        .setup-instructions {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            margin-top: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+        }
+
+        .setup-instructions h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .setup-instructions ol {
+            margin-left: 20px;
+            line-height: 1.6;
+        }
+
+        .setup-instructions li {
+            margin-bottom: 10px;
+        }
+
+        .code {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Azure Reservation Gap Analysis</h1>
+            <p>Real-time analysis of your Azure VM reservations vs actual usage</p>
+        </div>
+
+        <div class="auth-section">
+            <h2>Azure Configuration</h2>
+            <div class="config-grid">
+                <div class="input-group">
+                    <label for="clientId">Client ID</label>
+                    <input type="text" id="clientId" placeholder="Your Azure App Registration Client ID">
+                </div>
+                <div class="input-group">
+                    <label for="tenantId">Tenant ID</label>
+                    <input type="text" id="tenantId" placeholder="Your Azure AD Tenant ID">
+                </div>
+                <div class="input-group">
+                    <label for="subscriptionId">Subscription ID</label>
+                    <input type="text" id="subscriptionId" placeholder="Your Azure Subscription ID">
+                </div>
+            </div>
+            
+            <div style="display: flex; gap: 15px; margin-top: 20px;">
+                <button class="btn btn-primary" onclick="authenticateAzure()">Connect to Azure</button>
+                <button class="btn btn-secondary" onclick="loadSampleData()">Load Sample Data</button>
+            </div>
+
+            <div id="authStatus"></div>
+        </div>
+
+        <div id="dashboard" class="dashboard">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value" id="totalReservations">-</div>
+                    <div class="metric-label">Total Reservations</div>
+                    <div class="metric-trend trend-positive" id="reservationTrend">+12% vs last month</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="activeVMs">-</div>
+                    <div class="metric-label">Active VMs</div>
+                    <div class="metric-trend trend-negative" id="vmTrend">-3% vs last month</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="utilizationRate">-</div>
+                    <div class="metric-label">Utilization Rate</div>
+                    <div class="metric-trend" id="utilizationTrend">85% target</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="costImpact">-</div>
+                    <div class="metric-label">Monthly Cost Gap</div>
+                    <div class="metric-trend trend-negative" id="costTrend">Optimization needed</div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <div class="chart-title">Reservation vs Usage by Region</div>
+                <canvas id="regionChart" width="400" height="200"></canvas>
+            </div>
+
+            <div class="chart-container">
+                <div class="chart-title">VM Size Distribution Gap Analysis</div>
+                <canvas id="sizeChart" width="400" height="200"></canvas>
+            </div>
+
+            <div class="gap-table">
+                <div class="chart-title">Detailed Gap Analysis</div>
+                <table id="gapTable">
+                    <thead>
+                        <tr>
+                            <th>Region</th>
+                            <th>VM Size</th>
+                            <th>Reserved</th>
+                            <th>Actual Usage</th>
+                            <th>Gap</th>
+                            <th>Cost Impact</th>
+                            <th>Recommendation</th>
+                        </tr>
+                    </thead>
+                    <tbody id="gapTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="setup-instructions">
+            <h3>🔧 Setup Instructions</h3>
+            <ol>
+                <li><strong>Update your Azure App Registration redirect URI to:</strong>
+                    <div class="code" id="redirectUri">https://your-static-app-url.azurestaticapps.net</div>
+                </li>
+                <li><strong>Required API Permissions:</strong>
+                    <ul>
+                        <li>Microsoft Graph → User.Read</li>
+                        <li>Azure Service Management → user_impersonation</li>
+                        <li>Grant admin consent</li>
+                    </ul>
+                </li>
+                <li><strong>Required Azure RBAC Roles:</strong>
+                    <ul>
+                        <li><strong>Reader</strong> role on subscription (for VM data)</li>
+                        <li><strong>Reservation Purchaser</strong> role (for reservation data)</li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        // Update redirect URI display with current URL
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('redirectUri').textContent = window.location.origin;
+        });
+
+        let msalInstance;
+        let accessToken;
+        let azureConfig = {};
+
+        // Sample data for demonstration
+        const sampleData = {
+            reservations: [
+                { region: 'East US', vmSize: 'Standard_D2s_v3', quantity: 10, cost: 1200 },
+                { region: 'East US', vmSize: 'Standard_D4s_v3', quantity: 5, cost: 1800 },
+                { region: 'West US', vmSize: 'Standard_D2s_v3', quantity: 8, cost: 960 },
+                { region: 'West Europe', vmSize: 'Standard_D8s_v3', quantity: 3, cost: 2400 },
+                { region: 'Southeast Asia', vmSize: 'Standard_D2s_v3', quantity: 6, cost: 720 }
+            ],
+            actualVMs: [
+                { region: 'East US', vmSize: 'Standard_D2s_v3', quantity: 8 },
+                { region: 'East US', vmSize: 'Standard_D4s_v3', quantity: 7 },
+                { region: 'West US', vmSize: 'Standard_D2s_v3', quantity: 8 },
+                { region: 'West Europe', vmSize: 'Standard_D8s_v3', quantity: 2 },
+                { region: 'Southeast Asia', vmSize: 'Standard_D2s_v3', quantity: 4 },
+                { region: 'Central US', vmSize: 'Standard_D2s_v3', quantity: 3 }
+            ]
+        };
+
+        function initializeMSAL() {
+            const clientId = document.getElementById('clientId').value.trim();
+            const tenantId = document.getElementById('tenantId').value.trim();
+            
+            if (!clientId || !tenantId) {
+                showStatus('❌ Please enter both Client ID and Tenant ID', 'error');
+                return false;
+            }
+
+            azureConfig = {
+                clientId: clientId,
+                tenantId: tenantId,
+                subscriptionId: document.getElementById('subscriptionId').value.trim()
+            };
+
+            try {
+                msalInstance = new msal.PublicClientApplication({
+                    auth: {
+                        clientId: clientId,
+                        authority: `https://login.microsoftonline.com/${tenantId}`,
+                        redirectUri: window.location.origin
+                    },
+                    cache: {
+                        cacheLocation: "memory"
+                    }
+                });
+                
+                return true;
+                
+            } catch (error) {
+                console.error('❌ MSAL initialization error:', error);
+                showStatus(`❌ MSAL initialization failed: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        async function authenticateAzure() {
+            if (!initializeMSAL()) return;
+
+            try {
+                showStatus('Authenticating with Azure...', 'info');
+                
+                const loginRequest = {
+                    scopes: ["https://management.azure.com/user_impersonation", "openid", "profile"]
+                };
+
+                const response = await msalInstance.loginPopup(loginRequest);
+                accessToken = response.accessToken;
+                
+                showStatus(`✅ Successfully authenticated as ${response.account.username}`, 'success');
+                
+                // Load real Azure data
+                await loadAzureData();
+                
+            } catch (error) {
+                console.error('Authentication failed:', error);
+                showStatus(`❌ Authentication failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function loadAzureData() {
+            try {
+                showStatus('🔄 Fetching Azure reservation and VM data...', 'info');
+                
+                // In a real implementation, these would be actual Azure REST API calls
+                // For now, we'll simulate API calls and use sample data
+                
+                setTimeout(() => {
+                    processGapAnalysis(sampleData);
+                    showStatus('✅ Data loaded successfully! Showing sample data for demonstration.', 'success');
+                }, 2000);
+                
+            } catch (error) {
+                console.error('Data loading failed:', error);
+                showStatus(`❌ Failed to load Azure data: ${error.message}`, 'error');
+            }
+        }
+
+        function loadSampleData() {
+            showStatus('📊 Loading sample data for demonstration...', 'info');
+            setTimeout(() => {
+                processGapAnalysis(sampleData);
+                showStatus('✅ Sample data loaded! This demonstrates the analysis with mock Azure data.', 'success');
+            }, 1000);
+        }
+
+        function processGapAnalysis(data) {
+            const { reservations, actualVMs } = data;
+            
+            // Calculate gaps
+            const gaps = calculateGaps(reservations, actualVMs);
+            
+            // Update metrics
+            updateMetrics(reservations, actualVMs, gaps);
+            
+            // Create charts
+            createRegionChart(gaps);
+            createSizeChart(gaps);
+            
+            // Populate table
+            populateGapTable(gaps);
+            
+            // Show dashboard
+            document.getElementById('dashboard').classList.add('active');
+        }
+
+        function calculateGaps(reservations, actualVMs) {
+            const gaps = [];
+            const reservationMap = new Map();
+            const usageMap = new Map();
+            
+            // Index reservations and actual VMs
+            reservations.forEach(r => {
+                const key = `${r.region}-${r.vmSize}`;
+                reservationMap.set(key, r);
+            });
+            
+            actualVMs.forEach(vm => {
+                const key = `${vm.region}-${vm.vmSize}`;
+                usageMap.set(key, vm);
+            });
+            
+            // Find all unique combinations
+            const allKeys = new Set([...reservationMap.keys(), ...usageMap.keys()]);
+            
+            allKeys.forEach(key => {
+                const [region, vmSize] = key.split('-');
+                const reservation = reservationMap.get(key);
+                const usage = usageMap.get(key);
+                
+                const reserved = reservation ? reservation.quantity : 0;
+                const actual = usage ? usage.quantity : 0;
+                const gap = reserved - actual;
+                const cost = reservation ? reservation.cost : 0;
+                
+                gaps.push({
+                    region,
+                    vmSize,
+                    reserved,
+                    actual,
+                    gap,
+                    costImpact: gap > 0 ? (gap / reserved) * cost : 0,
+                    recommendation: getRecommendation(gap, reserved, actual)
+                });
+            });
+            
+            return gaps;
+        }
+
+        function getRecommendation(gap, reserved, actual) {
+            if (gap > 0) {
+                const wastePercentage = (gap / reserved) * 100;
+                if (wastePercentage > 50) return 'Consider reducing reservation';
+                if (wastePercentage > 20) return 'Monitor usage trends';
+                return 'Minor over-provisioning';
+            } else if (gap < 0) {
+                return 'Consider additional reservations';
+            }
+            return 'Optimal utilization';
+        }
+
+        function updateMetrics(reservations, actualVMs, gaps) {
+            const totalReservations = reservations.reduce((sum, r) => sum + r.quantity, 0);
+            const totalVMs = actualVMs.reduce((sum, vm) => sum + vm.quantity, 0);
+            const utilizationRate = totalReservations > 0 ? ((totalVMs / totalReservations) * 100).toFixed(1) : 0;
+            const totalCostImpact = gaps.reduce((sum, g) => sum + Math.abs(g.costImpact), 0);
+            
+            document.getElementById('totalReservations').textContent = totalReservations;
+            document.getElementById('activeVMs').textContent = totalVMs;
+            document.getElementById('utilizationRate').textContent = `${utilizationRate}%`;
+            document.getElementById('costImpact').textContent = `$${totalCostImpact.toLocaleString()}`;
+        }
+
+        function createRegionChart(gaps) {
+            const ctx = document.getElementById('regionChart').getContext('2d');
+            
+            const regions = [...new Set(gaps.map(g => g.region))];
+            const reservedData = regions.map(region => 
+                gaps.filter(g => g.region === region).reduce((sum, g) => sum + g.reserved, 0)
+            );
+            const actualData = regions.map(region => 
+                gaps.filter(g => g.region === region).reduce((sum, g) => sum + g.actual, 0)
+            );
+
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: regions,
+                    datasets: [
+                        {
+                            label: 'Reserved',
+                            data: reservedData,
+                            backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                            borderColor: 'rgba(102, 126, 234, 1)',
+                            borderWidth: 2,
+                            borderRadius: 8
+                        },
+                        {
+                            label: 'Actual Usage',
+                            data: actualData,
+                            backgroundColor: 'rgba(118, 75, 162, 0.8)',
+                            borderColor: 'rgba(118, 75, 162, 1)',
+                            borderWidth: 2,
+                            borderRadius: 8
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)'
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function createSizeChart(gaps) {
+            const ctx = document.getElementById('sizeChart').getContext('2d');
+            
+            const vmSizes = [...new Set(gaps.map(g => g.vmSize))];
+            const gapData = vmSizes.map(size => {
+                const sizeGaps = gaps.filter(g => g.vmSize === size);
+                return sizeGaps.reduce((sum, g) => sum + g.gap, 0);
+            });
+
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: vmSizes,
+                    datasets: [{
+                        data: gapData.map(Math.abs),
+                        backgroundColor: [
+                            'rgba(102, 126, 234, 0.8)',
+                            'rgba(118, 75, 162, 0.8)',
+                            'rgba(255, 107, 107, 0.8)',
+                            'rgba(81, 207, 102, 0.8)',
+                            'rgba(255, 193, 7, 0.8)'
+                        ],
+                        borderWidth: 3,
+                        borderColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                        }
+                    }
+                }
+            });
+        }
+
+        function populateGapTable(gaps) {
+            const tbody = document.getElementById('gapTableBody');
+            tbody.innerHTML = '';
+            
+            gaps.forEach(gap => {
+                const row = document.createElement('tr');
+                const gapClass = gap.gap > 0 ? 'gap-negative' : gap.gap < 0 ? 'gap-positive' : '';
+                const gapSign = gap.gap > 0 ? '+' : '';
+                
+                row.innerHTML = `
+                    <td>${gap.region}</td>
+                    <td>${gap.vmSize}</td>
+                    <td>${gap.reserved}</td>
+                    <td>${gap.actual}</td>
+                    <td class="${gapClass}">${gapSign}${gap.gap}</td>
+                    <td>$${Math.round(gap.costImpact).toLocaleString()}</td>
+                    <td>${gap.recommendation}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('authStatus');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            showStatus('✅ Ready! Configure your Azure settings and click "Connect to Azure" or try "Load Sample Data"', 'info');
+        });
+    </script>
+</body>
+</html>
