@@ -391,19 +391,27 @@
         const argData = await argQueryAll(targetSubs, kql);
         const runningNow = (argData || []).map(o => ({ region: String(o.region).toLowerCase(), skuName: String(o.vmSize), running: Number(o.running) }));
 
-        // 5) If familyMode, roll up sizes to instanceFlexibilityGroup family (best-effort mapping via prefix)
-        const toFamily = (sku) => {
-          // e.g., Standard_D4s_v3 -> Dv3 Series (approx). Use IFG from details when present.
-          const m = sku.match(/^Standard_([A-Z]+)[\w]*_v(\d+)/i); if (!m) return sku;
-          return `${m[1].toUpperCase()}v${m[2]} Series`;
+        // 5) If familyMode, roll up using *actual* Instance Flexibility Groups (IFG) from reservationDetails
+        // Build a sku->family map from what we actually observe in reservationDetails to avoid over-aggregation
+        const skuToFamily = new Map();
+        reservationsAgg.forEach(x => {
+          if (x.skuName && x.family) skuToFamily.set(String(x.skuName).toLowerCase(), x.family);
+        });
+        const keyFor = (sku, family) => {
+          if (!familyMode) return sku;
+          // Prefer the explicit family from details; else only map if we have a known sku->family from the tenant
+          return family || skuToFamily.get(String(sku).toLowerCase()) || sku;
         };
 
         const reservations = reservationsAgg.map(x => ({
           ...x,
-          key: familyMode ? (x.family || toFamily(x.skuName)) : x.skuName
+          key: keyFor(x.skuName, x.family)
         }));
 
         const runningKeyed = runningNow.map(x => ({
+          ...x,
+          key: keyFor(x.skuName)
+        }));(x => ({
           ...x,
           key: familyMode ? toFamily(x.skuName) : x.skuName
         }));
