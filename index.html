@@ -268,14 +268,50 @@
       return res.json();
     }
 
+    // Paged GET helper for ARM (follows nextLink)
+    async function armGETPaged(path) {
+      const token = accessToken || await getToken();
+      let url = `${ARM}${path}`;
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+      const all = [];
+      while (url) {
+        const res = await fetch(url, { headers });
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+        const json = await res.json();
+        if (Array.isArray(json)) all.push(...json);
+        else if (json.value) all.push(...json.value);
+        else if (json.data) all.push(...json.data);
+        const nl = json.nextLink || json['@nextLink'] || json.nextPageLink;
+        url = nl ? (/^https?:/i.test(nl) ? nl : `${ARM}${nl}`) : null;
+      }
+      return all;
+    }
+
+    // Resource Graph full-result helper (paginates with $top/$skip)
+    async function argQueryAll(subscriptions, kql) {
+      const top = 1000;
+      let skip = 0;
+      let all = [];
+      while (true) {
+        const body = { query: kql, options: { $top: top, $skip: skip, resultFormat: 'objectArray' } };
+        if (subscriptions && subscriptions.length) body.subscriptions = subscriptions;
+        const res = await armPOST(`/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`, body);
+        const chunk = res.data || [];
+        all = all.concat(chunk);
+        if (chunk.length < top) break;
+        skip += chunk.length;
+      }
+      return all;
+    }
+
     // ====== Data loaders (Reservations + Consumption + ARG)
     async function loadAzureData() {
       try {
         showStatus('Fetching reservations & utilization…', 'info');
 
         // 1) List Reservation Orders
-        const orders = await armGET(`/providers/Microsoft.Capacity/reservationOrders?api-version=${RESERVATION_API_VERSION}`);
-        const orderIds = (orders.value || []).map(o => o.name);
+        const orders = await armGETPaged(`/providers/Microsoft.Capacity/reservationOrders?api-version=${RESERVATION_API_VERSION}`);
+        const orderIds = orders.map(o => o.name);
         if (!orderIds.length) { showStatus('No reservation orders found in tenant.', 'error'); return; }
 
         // Read filters from UI now (used below)
@@ -286,8 +322,8 @@
         // 2) For each order, list Reservations and map reservationId -> region + sku + scope (apply filters)
         const reservationMeta = new Map();
         for (const orderId of orderIds) {
-          const reservations = await armGET(`/providers/Microsoft.Capacity/reservationOrders/${orderId}/reservations?api-version=${RESERVATION_API_VERSION}`);
-          (reservations.value || []).forEach(r => {
+          const reservations = await armGETPaged(`/providers/Microsoft.Capacity/reservationOrders/${orderId}/reservations?api-version=${RESERVATION_API_VERSION}`);
+          reservations.forEach(r => {
             const p = r.properties || {};
             const prov = String(p.provisioningState || '').toLowerCase();
             if (statusSucceededOnly && prov !== 'succeeded') return;
@@ -319,8 +355,7 @@
         const allowedResIds = new Set(reservationMeta.keys());
         const reservationsAgg = [];
         for (const orderId of orderIds) {
-          const details = await armGET(`/providers/Microsoft.Capacity/reservationorders/${orderId}/providers/Microsoft.Consumption/reservationDetails?$filter=${encodeURIComponent(dateFilter)}&api-version=${CONSUMPTION_API_VERSION}`);
-          const rows = details.value || [];
+          const rows = await armGETPaged(`/providers/Microsoft.Capacity/reservationorders/${orderId}/providers/Microsoft.Consumption/reservationDetails?$filter=${encodeURIComponent(dateFilter)}&api-version=${CONSUMPTION_API_VERSION}`);
           const byRes = new Map();
           rows.forEach(item => {
             const p = item.properties || {};
@@ -353,8 +388,8 @@
         const pick = Array.from(new Set(Array.from(reservationMeta.values()).map(x => x.scopeSubId).filter(Boolean))); if (pick.length) targetSubs = pick;
         const argBody = { query: kql };
         if (targetSubs && targetSubs.length) argBody.subscriptions = targetSubs;
-        const arg = await armPOST(`/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`, argBody);
-        const runningNow = (arg.data || []).map(r => ({ region: String(r[0]).toLowerCase(), skuName: String(r[1]), running: Number(r[2]) }));
+        const argData = await argQueryAll(targetSubs, kql);
+        const runningNow = (argData || []).map(o => ({ region: String(o.region).toLowerCase(), skuName: String(o.vmSize), running: Number(o.running) }));
 
         // 5) If familyMode, roll up sizes to instanceFlexibilityGroup family (best-effort mapping via prefix)
         const toFamily = (sku) => {
