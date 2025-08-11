@@ -489,198 +489,234 @@
         }
 
         async function loadAzureData() {
-            try {
-                showStatus('🔄 Fetching Azure reservation and VM data...', 'info');
-                
-                if (!azureConfig.subscriptionId) {
-                    showStatus('⚠️ Subscription ID missing. Using sample data for demonstration.', 'info');
-                    setTimeout(() => {
-                        processGapAnalysis(sampleData);
-                        showStatus('✅ Sample data loaded! Enter Subscription ID for real data.', 'success');
-                    }, 1500);
-                    return;
-                }
-                
-                // Try to fetch real Azure data
-                try {
-                    const [reservations, vms] = await Promise.all([
-                        fetchAzureReservations(),
-                        fetchAzureVMs()
-                    ]);
-                    
-                    if (reservations.length === 0 && vms.length === 0) {
-                        showStatus('⚠️ No Azure data found. Using sample data for demonstration.', 'info');
-                        processGapAnalysis(sampleData);
-                    } else {
-                        const realData = {
-                            reservations: reservations,
-                            actualVMs: vms
-                        };
-                        processGapAnalysis(realData);
-                        showStatus('✅ Real Azure data loaded successfully!', 'success');
-                    }
-                } catch (apiError) {
-                    console.error('Azure API error:', apiError);
-                    showStatus(`⚠️ Azure API error. Using sample data. Error: ${apiError.message}`, 'info');
-                    processGapAnalysis(sampleData);
-                }
-                
-            } catch (error) {
-                console.error('Data loading failed:', error);
-                showStatus(`⚠️ Failed to load Azure data. Using sample data instead.`, 'info');
-                processGapAnalysis(sampleData);
-            }
+    try {
+        showStatus('🔄 Fetching Azure reservation and VM data...', 'info');
+        
+        if (!accessToken || !azureConfig.subscriptionId) {
+            throw new Error('Missing access token or subscription ID');
         }
 
-        async function fetchAzureReservations() {
-            try {
-                console.log('🔍 Fetching reservations...');
-                
-                // First, try to get reservation orders
-                const orderUrl = `https://management.azure.com/providers/Microsoft.Capacity/reservationOrders?api-version=2020-10-25`;
-                
-                const orderResponse = await fetch(orderUrl, {
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
+        const headers = {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+        };
 
-                if (!orderResponse.ok) {
-                    throw new Error(`Failed to fetch reservation orders: ${orderResponse.status}`);
-                }
+        // Fetch reservations and VMs in parallel
+        const [reservationsData, vmsData] = await Promise.all([
+            fetchReservations(headers),
+            fetchVMs(headers)
+        ]);
+        
+        const processedData = {
+            reservations: reservationsData,
+            actualVMs: vmsData
+        };
+        
+        processGapAnalysis(processedData);
+        showStatus('✅ Real Azure data loaded successfully!', 'success');
+        
+    } catch (error) {
+        console.error('Data loading failed:', error);
+        showStatus(`❌ Failed to load Azure data: ${error.message}`, 'error');
+        
+        // Fallback to sample data with warning
+        setTimeout(() => {
+            showStatus('⚠️ Using sample data as fallback. Check your permissions and subscription ID.', 'error');
+            processGapAnalysis(sampleData);
+        }, 2000);
+    }
+}
 
-                const orderData = await orderResponse.json();
-                const reservations = [];
-
-                // Process each reservation order
-                for (const order of orderData.value || []) {
+async function fetchReservations(headers) {
+    try {
+        // Get all reservations for the tenant
+        const reservationsUrl = `https://management.azure.com/providers/Microsoft.Capacity/reservationOrders?api-version=2022-03-01`;
+        
+        const reservationsResponse = await fetch(reservationsUrl, { headers });
+        
+        if (!reservationsResponse.ok) {
+            throw new Error(`Reservations API error: ${reservationsResponse.status} ${reservationsResponse.statusText}`);
+        }
+        
+        const reservationsResult = await reservationsResponse.json();
+        const reservations = [];
+        
+        // Process each reservation order
+        for (const order of reservationsResult.value || []) {
+            if (order.properties?.reservations) {
+                for (const reservation of order.properties.reservations) {
                     try {
-                        const reservationUrl = `https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/${order.name}/reservations?api-version=2020-10-25`;
+                        // Get detailed reservation info
+                        const detailUrl = `https://management.azure.com${reservation.id}?api-version=2022-03-01`;
+                        const detailResponse = await fetch(detailUrl, { headers });
                         
-                        const reservationResponse = await fetch(reservationUrl, {
-                            headers: {
-                                'Authorization': `Bearer ${accessToken}`,
-                                'Content-Type': 'application/json'
-                            }
-                        });
-
-                        if (reservationResponse.ok) {
-                            const reservationData = await reservationResponse.json();
+                        if (detailResponse.ok) {
+                            const detail = await detailResponse.json();
+                            const props = detail.properties;
                             
-                            for (const reservation of reservationData.value || []) {
-                                if (reservation.properties?.reservedResourceType === 'VirtualMachines') {
-                                    
-                                    // Extract region from applied scope or use a default
-                                    let region = 'Unknown';
-                                    if (reservation.properties.appliedScopeProperties) {
-                                        const resourceId = reservation.properties.appliedScopeProperties.resourceGroupId || '';
-                                        const locationMatch = resourceId.match(/locations\/([^\/]+)/);
-                                        region = locationMatch ? locationMatch[1] : 'Global';
-                                    }
-
-                                    reservations.push({
-                                        region: region,
-                                        vmSize: reservation.properties.skuName || 'Unknown',
-                                        quantity: reservation.properties.quantity || 0,
-                                        cost: calculateReservationCost(reservation.properties.skuName, reservation.properties.quantity)
-                                    });
-                                }
+                            // Only include VM reservations that are active
+                            if (props?.sku?.name?.includes('VM') && 
+                                props?.provisioningState === 'Succeeded' &&
+                                props?.effectiveDateTime && 
+                                props?.expiryDateTime &&
+                                new Date(props.effectiveDateTime) <= new Date() &&
+                                new Date(props.expiryDateTime) > new Date()) {
+                                
+                                reservations.push({
+                                    region: props.appliedScopeProperties?.displayName || props.location || 'Unknown',
+                                    vmSize: props.sku.name,
+                                    quantity: props.quantity || 1,
+                                    cost: calculateReservationCost(props),
+                                    term: props.term,
+                                    scope: props.appliedScopeType
+                                });
                             }
                         }
-                    } catch (err) {
-                        console.warn('Error fetching reservation details:', err);
+                    } catch (detailError) {
+                        console.warn('Failed to fetch reservation detail:', detailError);
                     }
                 }
-
-                console.log(`✅ Found ${reservations.length} VM reservations`);
-                return reservations;
-                
-            } catch (error) {
-                console.error('Error fetching reservations:', error);
-                return [];
             }
         }
+        
+        return reservations;
+        
+    } catch (error) {
+        console.error('Error fetching reservations:', error);
+        throw new Error(`Failed to fetch reservations: ${error.message}`);
+    }
+}
 
-        async function fetchAzureVMs() {
-            try {
-                console.log('🔍 Fetching VMs...');
-                
-                const url = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Compute/virtualMachines?api-version=2023-03-01&statusOnly=true`;
-                
-                const response = await fetch(url, {
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch VMs: ${response.status} ${response.statusText}`);
-                }
-
-                const data = await response.json();
-                const vmCounts = new Map();
-
-                // Count VMs by region and size
-                for (const vm of data.value || []) {
-                    const region = vm.location || 'Unknown';
-                    const vmSize = vm.properties?.hardwareProfile?.vmSize || 'Unknown';
-                    
-                    // Check if VM is running (for VMs with status)
-                    let isRunning = true; // Default to true if status not available
-                    if (vm.properties?.instanceView?.statuses) {
-                        const powerState = vm.properties.instanceView.statuses.find(
-                            status => status.code?.startsWith('PowerState/')
-                        );
-                        isRunning = powerState?.code === 'PowerState/running';
-                    }
-                    
-                    if (isRunning) {
-                        const key = `${region}-${vmSize}`;
-                        vmCounts.set(key, (vmCounts.get(key) || 0) + 1);
-                    }
-                }
-
-                // Convert to array format
-                const vms = [];
-                vmCounts.forEach((quantity, key) => {
-                    const [region, vmSize] = key.split('-');
-                    vms.push({
-                        region: region,
-                        vmSize: vmSize,
-                        quantity: quantity
-                    });
-                });
-
-                console.log(`✅ Found ${vms.length} unique VM configurations`);
-                return vms;
-                
-            } catch (error) {
-                console.error('Error fetching VMs:', error);
-                return [];
-            }
+async function fetchVMs(headers) {
+    try {
+        // Get all VMs in the subscription
+        const vmsUrl = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Compute/virtualMachines?api-version=2023-03-01&$expand=instanceView`;
+        
+        const vmsResponse = await fetch(vmsUrl, { headers });
+        
+        if (!vmsResponse.ok) {
+            throw new Error(`VMs API error: ${vmsResponse.status} ${vmsResponse.statusText}`);
         }
-
-        function calculateReservationCost(vmSize, quantity = 1) {
-            // Simplified cost calculation based on common VM sizes
-            const baseCosts = {
-                'Standard_D2s_v3': 120,
-                'Standard_D4s_v3': 240,
-                'Standard_D8s_v3': 480,
-                'Standard_D16s_v3': 960,
-                'Standard_B2s': 60,
-                'Standard_B4ms': 120,
-                'Standard_B8ms': 240,
-                'Standard_E2s_v3': 140,
-                'Standard_E4s_v3': 280,
-                'Standard_F2s_v2': 90,
-                'Standard_F4s_v2': 180
-            };
+        
+        const vmsResult = await vmsResponse.json();
+        const vmUsage = new Map();
+        
+        // Process VMs and group by region and size
+        (vmsResult.value || []).forEach(vm => {
+            // Only count running VMs
+            const isRunning = vm.properties?.instanceView?.statuses?.some(
+                status => status.code === 'PowerState/running'
+            );
             
-            const baseCost = baseCosts[vmSize] || 100; // Default cost for unknown sizes
-            return baseCost * quantity;
+            if (isRunning) {
+                const region = vm.location;
+                const vmSize = vm.properties?.hardwareProfile?.vmSize;
+                
+                if (region && vmSize) {
+                    const key = `${region}-${vmSize}`;
+                    const current = vmUsage.get(key) || { region, vmSize, quantity: 0 };
+                    current.quantity += 1;
+                    vmUsage.set(key, current);
+                }
+            }
+        });
+        
+        return Array.from(vmUsage.values());
+        
+    } catch (error) {
+        console.error('Error fetching VMs:', error);
+        throw new Error(`Failed to fetch VMs: ${error.message}`);
+    }
+}
+
+function calculateReservationCost(reservationProps) {
+    // Estimate monthly cost based on reservation properties
+    // This is a simplified calculation - actual billing data would require different APIs
+    
+    const quantity = reservationProps.quantity || 1;
+    const term = reservationProps.term || 'P1Y';
+    
+    // Basic cost estimates per VM size per month (these would come from Azure pricing API in production)
+    const costEstimates = {
+        'Standard_D2s_v3': 100,
+        'Standard_D4s_v3': 200,
+        'Standard_D8s_v3': 400,
+        'Standard_D16s_v3': 800,
+        'Standard_E2s_v3': 120,
+        'Standard_E4s_v3': 240,
+        'Standard_E8s_v3': 480,
+        'Standard_F2s_v2': 80,
+        'Standard_F4s_v2': 160,
+        'Standard_F8s_v2': 320
+    };
+    
+    const vmSize = reservationProps.sku?.name || '';
+    const baseCost = costEstimates[vmSize] || 150; // Default estimate
+    
+    // Apply reservation discount (typically 30-70% off pay-as-you-go)
+    const reservationDiscount = 0.4; // 40% discount
+    const monthlyCost = baseCost * quantity * (1 - reservationDiscount);
+    
+    return Math.round(monthlyCost);
+}
+
+// Additional helper function to refresh access token if needed
+async function ensureValidToken() {
+    try {
+        if (!msalInstance) {
+            throw new Error('MSAL not initialized');
         }
+        
+        const accounts = msalInstance.getAllAccounts();
+        if (accounts.length === 0) {
+            throw new Error('No authenticated accounts found');
+        }
+        
+        const silentRequest = {
+            scopes: ["https://management.azure.com/user_impersonation"],
+            account: accounts[0]
+        };
+        
+        const response = await msalInstance.acquireTokenSilent(silentRequest);
+        accessToken = response.accessToken;
+        return true;
+        
+    } catch (error) {
+        console.warn('Silent token acquisition failed, may need re-authentication:', error);
+        return false;
+    }
+}
+
+// Enhanced error handling and retry logic
+async function makeAzureApiCall(url, headers, retries = 2) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const response = await fetch(url, { headers });
+            
+            if (response.status === 401 && attempt < retries) {
+                // Token might be expired, try to refresh
+                const tokenRefreshed = await ensureValidToken();
+                if (tokenRefreshed) {
+                    headers['Authorization'] = `Bearer ${accessToken}`;
+                    continue; // Retry with new token
+                }
+            }
+            
+            if (!response.ok) {
+                throw new Error(`API call failed: ${response.status} ${response.statusText}`);
+            }
+            
+            return await response.json();
+            
+        } catch (error) {
+            if (attempt === retries) {
+                throw error;
+            }
+            console.warn(`API call attempt ${attempt + 1} failed, retrying...`, error);
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
+        }
+    }
+}
 
         function loadSampleData() {
             showStatus('📊 Loading sample data for demonstration...', 'info');
@@ -822,4 +858,130 @@
                         y: {
                             beginAtZero: true,
                             grid: {
-                                color: 'rgba
+                                color: 'rgba(0, 0, 0, 0.05)'
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function createSizeChart(gaps) {
+            const ctx = document.getElementById('sizeChart').getContext('2d');
+            
+            const vmSizes = [...new Set(gaps.map(g => g.vmSize))];
+            const gapData = vmSizes.map(size => {
+                const sizeGaps = gaps.filter(g => g.vmSize === size);
+                return sizeGaps.reduce((sum, g) => sum + g.gap, 0);
+            });
+
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: vmSizes,
+                    datasets: [{
+                        data: gapData.map(Math.abs),
+                        backgroundColor: [
+                            'rgba(102, 126, 234, 0.8)',
+                            'rgba(118, 75, 162, 0.8)',
+                            'rgba(255, 107, 107, 0.8)',
+                            'rgba(81, 207, 102, 0.8)',
+                            'rgba(255, 193, 7, 0.8)'
+                        ],
+                        borderWidth: 3,
+                        borderColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                        }
+                    }
+                }
+            });
+        }
+
+        function populateGapTable(gaps) {
+            const tbody = document.getElementById('gapTableBody');
+            tbody.innerHTML = '';
+            
+            gaps.forEach(gap => {
+                const row = document.createElement('tr');
+                const gapClass = gap.gap > 0 ? 'gap-negative' : gap.gap < 0 ? 'gap-positive' : '';
+                const gapSign = gap.gap > 0 ? '+' : '';
+                
+                row.innerHTML = `
+                    <td>${gap.region}</td>
+                    <td>${gap.vmSize}</td>
+                    <td>${gap.reserved}</td>
+                    <td>${gap.actual}</td>
+                    <td class="${gapClass}">${gapSign}${gap.gap}</td>
+                    <td>$${Math.round(gap.costImpact).toLocaleString()}</td>
+                    <td>${gap.recommendation}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('authStatus');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            // Check if MSAL loaded properly
+            setTimeout(() => {
+                if (typeof msal === 'undefined') {
+                    showStatus('❌ Azure authentication library failed to load. Try refreshing the page or use PowerShell method.', 'error');
+                    showPowerShellAlternative();
+                } else {
+                    showStatus('✅ Ready! Configure your Azure settings and click "Connect to Azure" or try "Load Sample Data"', 'success');
+                }
+            }, 1000); // Give time for library to load
+        });
+
+        function showPowerShellAlternative() {
+            const authSection = document.querySelector('.auth-section');
+            const powershellDiv = document.createElement('div');
+            powershellDiv.className = 'status info';
+            powershellDiv.style.marginTop = '20px';
+            powershellDiv.innerHTML = `
+                <h4>💡 Alternative: PowerShell Method</h4>
+                <p>If Azure authentication doesn't work, extract your data using PowerShell:</p>
+                <div class="code">
+# Connect to Azure
+Connect-AzAccount
+
+# Get reservations
+$reservations = Get-AzReservation | Where-Object {$_.Sku.Name -like "*VM*"}
+
+# Get current VMs
+$vms = Get-AzVM -Status | Where-Object {$_.PowerState -eq "VM running"}
+
+# Group and export
+$vms | Group-Object Location, HardwareProfile.VmSize | 
+    ForEach-Object {
+        [PSCustomObject]@{
+            Region = $_.Group[0].Location
+            VMSize = $_.Group[0].HardwareProfile.VmSize  
+            ActualQuantity = $_.Count
+        }
+    } | Export-Csv "current_vms.csv" -NoTypeInformation
+
+Write-Host "Upload current_vms.csv and compare with reservations manually"
+                </div>
+            `;
+            authSection.appendChild(powershellDiv);
+        }
+    </script>
+</body>
+</html>
