@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Azure Reservation Gap Analysis</title>
-    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <style>
         * {
@@ -726,8 +726,50 @@
 
         // Initialize on page load
         window.addEventListener('load', () => {
-            showStatus('✅ Ready! Configure your Azure settings and click "Connect to Azure" or try "Load Sample Data"', 'info');
+            // Check if MSAL loaded properly
+            setTimeout(() => {
+                if (typeof msal === 'undefined') {
+                    showStatus('❌ Azure authentication library failed to load. Try refreshing the page or use PowerShell method.', 'error');
+                    showPowerShellAlternative();
+                } else {
+                    showStatus('✅ Ready! Configure your Azure settings and click "Connect to Azure" or try "Load Sample Data"', 'success');
+                }
+            }, 1000); // Give time for library to load
         });
+
+        function showPowerShellAlternative() {
+            const authSection = document.querySelector('.auth-section');
+            const powershellDiv = document.createElement('div');
+            powershellDiv.className = 'status info';
+            powershellDiv.style.marginTop = '20px';
+            powershellDiv.innerHTML = `
+                <h4>💡 Alternative: PowerShell Method</h4>
+                <p>If Azure authentication doesn't work, extract your data using PowerShell:</p>
+                <div class="code">
+# Connect to Azure
+Connect-AzAccount
+
+# Get reservations
+$reservations = Get-AzReservation | Where-Object {$_.Sku.Name -like "*VM*"}
+
+# Get current VMs
+$vms = Get-AzVM -Status | Where-Object {$_.PowerState -eq "VM running"}
+
+# Group and export
+$vms | Group-Object Location, HardwareProfile.VmSize | 
+    ForEach-Object {
+        [PSCustomObject]@{
+            Region = $_.Group[0].Location
+            VMSize = $_.Group[0].HardwareProfile.VmSize  
+            ActualQuantity = $_.Count
+        }
+    } | Export-Csv "current_vms.csv" -NoTypeInformation
+
+Write-Host "Upload current_vms.csv and compare with reservations manually"
+                </div>
+            `;
+            authSection.appendChild(powershellDiv);
+        }
     </script>
 </body>
 </html>
