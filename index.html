@@ -1,1473 +1,469 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Azure Reservation Gap Analysis</title>
-    <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            color: #333;
-        }
-
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-
-        .header {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-        }
-
-        .header h1 {
-            font-size: 2.5rem;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 10px;
-        }
-
-        .auth-section {
-            background: rgba(255, 255, 255, 0.9);
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 25px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-        }
-
-        .config-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
-        .input-group {
-            display: flex;
-            flex-direction: column;
-        }
-
-        .input-group label {
-            font-weight: 600;
-            margin-bottom: 5px;
-            color: #555;
-        }
-
-        .input-group input {
-            padding: 12px 15px;
-            border: 2px solid #e1e5e9;
-            border-radius: 10px;
-            font-size: 14px;
-            transition: all 0.3s ease;
-            background: white;
-        }
-
-        .input-group input:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-
-        .btn {
-            padding: 12px 25px;
-            border: none;
-            border-radius: 10px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-size: 14px;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
-        }
-
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-secondary {
-            background: #f8f9fa;
-            color: #495057;
-            border: 2px solid #dee2e6;
-        }
-
-        .btn-secondary:hover {
-            background: #e9ecef;
-            transform: translateY(-1px);
-        }
-
-        .status {
-            padding: 15px 20px;
-            border-radius: 10px;
-            margin: 15px 0;
-            font-weight: 500;
-        }
-
-        .status.success {
-            background: linear-gradient(135deg, #51cf66, #40c057);
-            color: white;
-        }
-
-        .status.error {
-            background: linear-gradient(135deg, #ff6b6b, #ee5a52);
-            color: white;
-        }
-
-        .status.info {
-            background: linear-gradient(135deg, #74c0fc, #339af0);
-            color: white;
-        }
-
-        .dashboard {
-            display: none;
-        }
-
-        .dashboard.active {
-            display: block;
-        }
-
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 25px;
-            margin-bottom: 30px;
-        }
-
-        .metric-card {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            transition: transform 0.3s ease;
-        }
-
-        .metric-card:hover {
-            transform: translateY(-5px);
-        }
-
-        .metric-value {
-            font-size: 2.5rem;
-            font-weight: 700;
-            margin-bottom: 10px;
-        }
-
-        .metric-label {
-            font-size: 1rem;
-            color: #666;
-            font-weight: 500;
-        }
-
-        .metric-trend {
-            font-size: 0.9rem;
-            margin-top: 10px;
-            padding: 5px 10px;
-            border-radius: 20px;
-            display: inline-block;
-        }
-
-        .trend-positive {
-            background: rgba(81, 207, 102, 0.1);
-            color: #51cf66;
-        }
-
-        .trend-negative {
-            background: rgba(255, 107, 107, 0.1);
-            color: #ff6b6b;
-        }
-
-        .chart-container {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 25px;
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
-        }
-
-        .chart-title {
-            font-size: 1.3rem;
-            font-weight: 600;
-            margin-bottom: 20px;
-            color: #333;
-        }
-
-        .gap-table {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
-            overflow-x: auto;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
-
-        th, td {
-            padding: 12px 15px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }
-
-        th {
-            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-            font-weight: 600;
-            color: #495057;
-        }
-
-        tr:hover {
-            background: rgba(102, 126, 234, 0.05);
-        }
-
-        .gap-positive {
-            color: #51cf66;
-            font-weight: 600;
-        }
-
-        .gap-negative {
-            color: #ff6b6b;
-            font-weight: 600;
-        }
-
-        .setup-instructions {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 25px;
-            margin-top: 20px;
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
-        }
-
-        .setup-instructions h3 {
-            color: #667eea;
-            margin-bottom: 15px;
-        }
-
-        .setup-instructions ol {
-            margin-left: 20px;
-            line-height: 1.6;
-        }
-
-        .setup-instructions li {
-            margin-bottom: 10px;
-        }
-
-        .code {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 5px;
-            font-family: 'Courier New', monospace;
-            margin: 10px 0;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Azure Reservation Gap Analysis (Live)</title>
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; color: #333; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+    .header { background: rgba(255,255,255,.95); backdrop-filter: blur(10px); border-radius: 20px; padding: 30px; margin-bottom: 30px; box-shadow: 0 20px 40px rgba(0,0,0,.1); border: 1px solid rgba(255,255,255,.2); }
+    .header h1 { font-size: 2.5rem; font-weight: 700; background: linear-gradient(135deg,#667eea,#764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 10px; }
+    .auth-section { background: rgba(255,255,255,.9); border-radius: 15px; padding: 25px; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(0,0,0,.1) }
+    .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 15px; margin-bottom: 10px; }
+    .input-group { display: flex; flex-direction: column; }
+    .input-group label { font-weight: 600; margin-bottom: 5px; color: #555; }
+    .input-group input { padding: 12px 15px; border: 2px solid #e1e5e9; border-radius: 10px; font-size: 14px; transition: all .3s ease; background: white; }
+    .input-group input:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102,126,234,.1) }
+    .btn { padding: 12px 18px; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; transition: all .2s ease; text-transform: uppercase; letter-spacing: .5px; font-size: 13px; }
+    .btn-primary { background: linear-gradient(135deg,#667eea,#764ba2); color: white; box-shadow: 0 5px 15px rgba(102,126,234,.3) }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(102,126,234,.4) }
+    .btn-secondary { background: #f8f9fa; color: #495057; border: 2px solid #dee2e6 }
+    .btn-secondary:hover { background: #e9ecef; transform: translateY(-1px) }
+    .status { padding: 12px 16px; border-radius: 10px; margin: 12px 0; font-weight: 500; }
+    .status.success { background: linear-gradient(135deg,#51cf66,#40c057); color: white; }
+    .status.error { background: linear-gradient(135deg,#ff6b6b,#ee5a52); color: white; }
+    .status.info { background: linear-gradient(135deg,#74c0fc,#339af0); color: white; }
+    .dashboard { display: none; }
+    .dashboard.active { display: block; }
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap: 25px; margin-bottom: 30px; }
+    .metric-card { background: rgba(255,255,255,.95); backdrop-filter: blur(10px); border-radius: 15px; padding: 22px; box-shadow: 0 15px 35px rgba(0,0,0,.1); border: 1px solid rgba(255,255,255,.2); }
+    .metric-value { font-size: 2.2rem; font-weight: 700; margin-bottom: 6px; }
+    .metric-label { font-size: 1rem; color: #666; font-weight: 500; }
+    .metric-trend { font-size: .9rem; margin-top: 8px; padding: 5px 10px; border-radius: 20px; display: inline-block; }
+    .trend-positive { background: rgba(81,207,102,.1); color: #51cf66; }
+    .trend-negative { background: rgba(255,107,107,.1); color: #ff6b6b; }
+    .chart-container, .gap-table { background: rgba(255,255,255,.95); backdrop-filter: blur(10px); border-radius: 15px; padding: 25px; margin-bottom: 25px; box-shadow: 0 15px 35px rgba(0,0,0,.1); }
+    .chart-title { font-size: 1.2rem; font-weight: 600; margin-bottom: 12px; color: #333; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: linear-gradient(135deg,#f8f9fa,#e9ecef); font-weight: 600; color: #495057; }
+    tr:hover { background: rgba(102,126,234,.05) }
+    .gap-positive { color: #51cf66; font-weight: 600; }
+    .gap-negative { color: #ff6b6b; font-weight: 600; }
+    .setup-instructions { background: rgba(255,255,255,.95); border-radius: 15px; padding: 25px; margin-top: 20px; box-shadow: 0 15px 35px rgba(0,0,0,.1); }
+    .setup-instructions h3 { color: #667eea; margin-bottom: 12px; }
+    .code { background: #f8f9fa; padding: 10px; border-radius: 6px; font-family: 'Courier New', monospace; margin: 8px 0; overflow-x: auto; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .hint { font-size: 12px; color: #555; margin-top: 6px; }
+    .toggle { display: inline-flex; align-items: center; gap: 8px; }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>Azure Reservation Gap Analysis</h1>
-            <p>Real-time analysis of your Azure VM reservations vs actual usage</p>
-        </div>
-
-        <div class="auth-section">
-            <h2>Azure Configuration</h2>
-            <div class="config-grid">
-                <div class="input-group">
-                    <label for="clientId">Client ID</label>
-                    <input type="text" id="clientId" placeholder="Your Azure App Registration Client ID">
-                </div>
-                <div class="input-group">
-                    <label for="tenantId">Tenant ID</label>
-                    <input type="text" id="tenantId" placeholder="Your Azure AD Tenant ID">
-                </div>
-                <div class="input-group">
-                    <label for="subscriptionId">Subscription ID</label>
-                    <input type="text" id="subscriptionId" placeholder="Your Azure Subscription ID">
-                </div>
-            </div>
-            
-            <div style="display: flex; gap: 15px; margin-top: 20px;">
-                <button class="btn btn-primary" onclick="authenticateAzure()">Connect to Azure</button>
-                <button class="btn btn-secondary" onclick="loadSampleData()">Load Sample Data</button>
-            </div>
-
-            <div id="authStatus"></div>
-        </div>
-
-        <div id="dashboard" class="dashboard">
-            <div class="metrics-grid">
-                <div class="metric-card">
-                    <div class="metric-value" id="totalReservations">-</div>
-                    <div class="metric-label">Total Reservations</div>
-                    <div class="metric-trend trend-positive" id="reservationTrend">+12% vs last month</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="activeVMs">-</div>
-                    <div class="metric-label">Active VMs</div>
-                    <div class="metric-trend trend-negative" id="vmTrend">-3% vs last month</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="utilizationRate">-</div>
-                    <div class="metric-label">Utilization Rate</div>
-                    <div class="metric-trend" id="utilizationTrend">85% target</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="costImpact">-</div>
-                    <div class="metric-label">Monthly Cost Gap</div>
-                    <div class="metric-trend trend-negative" id="costTrend">Optimization needed</div>
-                </div>
-            </div>
-
-            <div class="chart-container">
-                <div class="chart-title">Reservation vs Usage by Region</div>
-                <canvas id="regionChart" width="400" height="200"></canvas>
-            </div>
-
-            <div class="chart-container">
-                <div class="chart-title">VM Size Distribution Gap Analysis</div>
-                <canvas id="sizeChart" width="400" height="200"></canvas>
-            </div>
-
-            <div class="gap-table">
-                <div class="chart-title">Detailed Gap Analysis</div>
-                <table id="gapTable">
-                    <thead>
-                        <tr>
-                            <th>Region</th>
-                            <th>VM Size</th>
-                            <th>Reserved</th>
-                            <th>Actual Usage</th>
-                            <th>Gap</th>
-                            <th>Cost Impact</th>
-                            <th>Recommendation</th>
-                        </tr>
-                    </thead>
-                    <tbody id="gapTableBody">
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="setup-instructions">
-            <h3>🔧 Setup Instructions</h3>
-            <ol>
-                <li><strong>Update your Azure App Registration redirect URI to:</strong>
-                    <div class="code" id="redirectUri">https://your-static-app-url.azurestaticapps.net</div>
-                </li>
-                <li><strong>Required API Permissions:</strong>
-                    <ul>
-                        <li>Microsoft Graph → User.Read</li>
-                        <li>Azure Service Management → user_impersonation</li>
-                        <li>Grant admin consent</li>
-                    </ul>
-                </li>
-                <li><strong>Required Azure RBAC Roles:</strong>
-                    <ul>
-                        <li><strong>Reader</strong> role on subscription (for VM data)</li>
-                        <li><strong>Reservation Purchaser</strong> role (for reservation data)</li>
-                    </ul>
-                </li>
-            </ol>
-        </div>
+  <div class="container">
+    <div class="header">
+      <h1>Azure Reservation Gap Analysis</h1>
+      <p>Live analysis of your VM reservations vs. actual usage — no CSVs.</p>
     </div>
 
-    <script>
-        // Update redirect URI display with current URL
-        document.addEventListener('DOMContentLoaded', function() {
-            document.getElementById('redirectUri').textContent = window.location.origin;
-        });
+    <div class="auth-section">
+      <h2>Azure Configuration</h2>
+      <div class="config-grid">
+        <div class="input-group">
+          <label for="clientId">Client ID</label>
+          <input type="text" id="clientId" placeholder="Your App registration (public client)" />
+        </div>
+        <div class="input-group">
+          <label for="tenantId">Tenant ID</label>
+          <input type="text" id="tenantId" placeholder="Your Entra ID tenant GUID" />
+        </div>
+        <div class="input-group">
+          <label for="subscriptionId">Subscription ID(s)</label>
+          <input type="text" id="subscriptionId" placeholder="subId or subId1, subId2" />
+          <div class="hint">Use commas for multiple subscriptions. Used by Resource Graph.</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-primary" id="btnConnect">Connect to Azure</button>
+        <button class="btn btn-secondary" id="btnSample">Load Sample Data</button>
+        <label class="toggle"><input type="checkbox" id="familyMode" checked /> Use family (instance flexibility) where possible</label>
+      </div>
+      <div id="authStatus" class="status info">Loading…</div>
+    </div>
 
-        let msalInstance;
-        let accessToken;
-        let azureConfig = {};
+    <div id="dashboard" class="dashboard">
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-value" id="totalReservations">-</div>
+          <div class="metric-label">Total Reserved Instances</div>
+          <div class="metric-trend" id="reservationTrend">from reservationDetails</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="activeVMs">-</div>
+          <div class="metric-label">Running VMs (now)</div>
+          <div class="metric-trend" id="vmTrend">Resource Graph</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="utilizationRate">-</div>
+          <div class="metric-label">Avg Utilization (30d)</div>
+          <div class="metric-trend" id="utilizationTrend">target ≥85%</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="costImpact">-</div>
+          <div class="metric-label">Estimated Monthly Gap Cost</div>
+          <div class="metric-trend trend-negative" id="costTrend">estimation</div>
+        </div>
+      </div>
 
-        // Sample data for demonstration
-        const sampleData = {
-            reservations: [
-                { region: 'East US', vmSize: 'Standard_D2s_v3', quantity: 10, cost: 1200 },
-                { region: 'East US', vmSize: 'Standard_D4s_v3', quantity: 5, cost: 1800 },
-                { region: 'West US', vmSize: 'Standard_D2s_v3', quantity: 8, cost: 960 },
-                { region: 'West Europe', vmSize: 'Standard_D8s_v3', quantity: 3, cost: 2400 },
-                { region: 'Southeast Asia', vmSize: 'Standard_D2s_v3', quantity: 6, cost: 720 }
-            ],
-            actualVMs: [
-                { region: 'East US', vmSize: 'Standard_D2s_v3', quantity: 8 },
-                { region: 'East US', vmSize: 'Standard_D4s_v3', quantity: 7 },
-                { region: 'West US', vmSize: 'Standard_D2s_v3', quantity: 8 },
-                { region: 'West Europe', vmSize: 'Standard_D8s_v3', quantity: 2 },
-                { region: 'Southeast Asia', vmSize: 'Standard_D2s_v3', quantity: 4 },
-                { region: 'Central US', vmSize: 'Standard_D2s_v3', quantity: 3 }
-            ]
+      <div class="chart-container">
+        <div class="chart-title">Reservation vs Usage by Region</div>
+        <canvas id="regionChart" height="160"></canvas>
+      </div>
+
+      <div class="chart-container">
+        <div class="chart-title">VM Size / Family Gap</div>
+        <canvas id="sizeChart" height="160"></canvas>
+      </div>
+
+      <div class="gap-table">
+        <div class="chart-title">Detailed Gap Analysis</div>
+        <table id="gapTable">
+          <thead>
+            <tr>
+              <th>Region</th>
+              <th>SKU / Size</th>
+              <th>Reserved</th>
+              <th>Avg Used (30d)</th>
+              <th>Running Now</th>
+              <th>Gap vs Now</th>
+              <th>Recommendation</th>
+            </tr>
+          </thead>
+          <tbody id="gapTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="setup-instructions">
+      <h3>Setup & required access</h3>
+      <ol>
+        <li><b>Redirect URI:</b> <code id="redirectUri"></code></li>
+        <li><b>MSAL scope:</b> <code>https://management.azure.com/.default</code> (Auth Code + PKCE)</li>
+        <li><b>RBAC you’ll need:</b>
+          <ul>
+            <li><b>Reservations Reader</b> on <code>/providers/Microsoft.Capacity</code> (for listing reservation orders)</li>
+            <li><b>Cost Management Reader</b> at subscription or billing scope (for reservation <i>details/summaries</i>)</li>
+            <li><b>Reader</b> on each subscription you query (for Resource Graph)</li>
+          </ul>
+        </li>
+      </ol>
+      <div class="hint">If you hit CORS or permission issues, use the included proxy pattern (Azure Function) described in the code comments.</div>
+    </div>
+  </div>
+
+  <script>
+    // ====== Globals
+    const ARM = 'https://management.azure.com';
+    const RESERVATION_API_VERSION = '2022-11-01'; // Microsoft.Capacity
+    const CONSUMPTION_API_VERSION = '2024-08-01'; // Microsoft.Consumption
+    const ARG_API_VERSION = '2024-04-01';         // Microsoft.ResourceGraph
+
+    let msalInstance; let account; let accessToken; let azureConfig = {}; let regionChart, sizeChart;
+
+    // Sample fallback
+    const sampleData = {
+      reservations: [
+        { reservationId: 'r1', region: 'eastus', skuName: 'Standard_D2s_v3', reservedQty: 10, avgUsed: 8.2 },
+        { reservationId: 'r2', region: 'eastus', skuName: 'Standard_D4s_v3', reservedQty: 5, avgUsed: 6.1 },
+        { reservationId: 'r3', region: 'westus', skuName: 'Standard_D2s_v3', reservedQty: 8, avgUsed: 7.9 },
+        { reservationId: 'r4', region: 'westeurope', skuName: 'Standard_D8s_v3', reservedQty: 3, avgUsed: 2.1 },
+        { reservationId: 'r5', region: 'southeastasia', skuName: 'Standard_D2s_v3', reservedQty: 6, avgUsed: 3.7 }
+      ],
+      runningNow: [
+        { region: 'eastus', skuName: 'Standard_D2s_v3', running: 8 },
+        { region: 'eastus', skuName: 'Standard_D4s_v3', running: 7 },
+        { region: 'westus', skuName: 'Standard_D2s_v3', running: 8 },
+        { region: 'westeurope', skuName: 'Standard_D8s_v3', running: 2 },
+        { region: 'southeastasia', skuName: 'Standard_D2s_v3', running: 4 },
+        { region: 'centralus', skuName: 'Standard_D2s_v3', running: 3 }
+      ]
+    };
+
+    // ====== UI boot
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('redirectUri').textContent = window.location.origin;
+      document.getElementById('btnConnect').addEventListener('click', authenticateAzure);
+      document.getElementById('btnSample').addEventListener('click', () => {
+        processGapAnalysis(sampleData);
+        showStatus('Loaded sample data. Use Connect for live data.', 'success');
+      });
+      showStatus('Ready. Enter Client/Tenant/Subscriptions and click Connect.', 'success');
+    });
+
+    // ====== Auth & token helpers
+    function initMSAL() {
+      const clientId = document.getElementById('clientId').value.trim();
+      const tenantId = document.getElementById('tenantId').value.trim();
+      if (!clientId || !tenantId) { showStatus('Please enter Client ID and Tenant ID', 'error'); return false; }
+      azureConfig = {
+        clientId,
+        tenantId,
+        subscriptions: (document.getElementById('subscriptionId').value || '').split(',').map(s => s.trim()).filter(Boolean)
+      };
+      msalInstance = new msal.PublicClientApplication({
+        auth: {
+          clientId,
+          authority: `https://login.microsoftonline.com/${tenantId}`,
+          redirectUri: window.location.origin
+        },
+        cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
+      });
+      return true;
+    }
+
+    async function getToken() {
+      const request = { scopes: ['https://management.azure.com/.default'] };
+      const accounts = msalInstance.getAllAccounts();
+      if (accounts.length) account = accounts[0];
+      try {
+        const result = await msalInstance.acquireTokenSilent({ ...request, account });
+        return result.accessToken;
+      } catch (e) {
+        const login = await msalInstance.loginPopup(request);
+        account = login.account; // set default account
+        const result = await msalInstance.acquireTokenSilent({ ...request, account });
+        return result.accessToken;
+      }
+    }
+
+    async function authenticateAzure() {
+      try {
+        if (!initMSAL()) return;
+        showStatus('Authenticating with Azure…', 'info');
+        accessToken = await getToken();
+        showStatus('Authenticated. Pulling live data…', 'success');
+        await loadAzureData();
+      } catch (err) {
+        console.error(err);
+        showStatus(`Authentication failed: ${err.message}`, 'error');
+      }
+    }
+
+    // ====== ARM helpers
+    async function armGET(path) {
+      const token = accessToken || await getToken();
+      const res = await fetch(`${ARM}${path}`, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+      return res.json();
+    }
+
+    async function armPOST(path, body) {
+      const token = accessToken || await getToken();
+      const res = await fetch(`${ARM}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+      return res.json();
+    }
+
+    // ====== Data loaders (Reservations + Consumption + ARG)
+    async function loadAzureData() {
+      try {
+        showStatus('Fetching reservations & utilization…', 'info');
+
+        // 1) List Reservation Orders
+        const orders = await armGET(`/providers/Microsoft.Capacity/reservationOrders?api-version=${RESERVATION_API_VERSION}`);
+        const orderIds = (orders.value || []).map(o => o.name);
+        if (!orderIds.length) { showStatus('No reservation orders found in tenant.', 'error'); return; }
+
+        // 2) For each order, list Reservations and map reservationId -> region + sku
+        const reservationMeta = new Map();
+        for (const orderId of orderIds) {
+          const reservations = await armGET(`/providers/Microsoft.Capacity/reservationOrders/${orderId}/reservations?api-version=${RESERVATION_API_VERSION}`);
+          (reservations.value || []).forEach(r => {
+            const region = (r.location || (r.properties && r.properties.location) || '').toLowerCase();
+            const skuName = (r.sku && r.sku.name) || (r.properties && r.properties.sku && r.properties.sku.name) || 'Unknown';
+            reservationMeta.set(r.name, { region, skuName, orderId });
+          });
+        }
+
+        // 3) Pull 30d Reservation Details per order (daily grain), aggregate avg used per reservationId
+        const end = new Date(); end.setUTCDate(end.getUTCDate() - 1); // yesterday for complete day
+        const start = new Date(end); start.setUTCDate(end.getUTCDate() - 29);
+        const filter = `properties/usageDate ge ${start.toISOString().split('T')[0]} AND properties/usageDate le ${end.toISOString().split('T')[0]}`;
+
+        const reservationsAgg = [];
+        for (const orderId of orderIds) {
+          const details = await armGET(`/providers/Microsoft.Capacity/reservationorders/${orderId}/providers/Microsoft.Consumption/reservationDetails?$filter=${encodeURIComponent(filter)}&api-version=${CONSUMPTION_API_VERSION}`);
+          const rows = details.value || [];
+          // group by reservationId
+          const byRes = new Map();
+          rows.forEach(item => {
+            const p = item.properties || {}; const rid = p.reservationId?.split('/').pop();
+            if (!rid) return;
+            const entry = byRes.get(rid) || { usedHours: 0, days: 0, reservedQty: 0, skuName: p.skuName, ifg: p.instanceFlexibilityGroup };
+            entry.usedHours += Number(p.usedHours || 0);
+            entry.days += 1;
+            entry.reservedQty = Math.max(entry.reservedQty, Number(p.totalReservedQuantity || 0));
+            byRes.set(rid, entry);
+          });
+
+          for (const [rid, v] of byRes) {
+            const meta = reservationMeta.get(rid) || {};
+            const avgUsed = v.days ? (v.usedHours / (24 * v.days)) : 0;
+            reservationsAgg.push({ reservationId: rid, region: meta.region, skuName: meta.skuName || v.skuName, reservedQty: v.reservedQty, avgUsed, family: v.ifg });
+          }
+        }
+
+        // 4) Get current running VMs by size+region via Resource Graph
+        showStatus('Querying Resource Graph for running VMs…', 'info');
+        const subs = azureConfig.subscriptions; // can be empty => tenant scope (needs extra perms)
+        const familyMode = document.getElementById('familyMode').checked;
+
+        const kql = `Resources\n| where type =~ 'microsoft.compute/virtualmachines'\n| extend vmSize = tostring(properties.hardwareProfile.vmSize), state = tostring(properties.extended.instanceView.powerState.code)\n| where state =~ 'PowerState/running'\n| summarize running = count() by region = tolower(location), vmSize`;
+
+        const argBody = { query: kql };
+        if (subs && subs.length) argBody.subscriptions = subs;
+        const arg = await armPOST(`/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`, argBody);
+        const runningNow = (arg.data || []).map(r => ({ region: String(r[0]).toLowerCase(), skuName: String(r[1]), running: Number(r[2]) }));
+
+        // 5) If familyMode, roll up sizes to instanceFlexibilityGroup family (best-effort mapping via prefix)
+        const toFamily = (sku) => {
+          // e.g., Standard_D4s_v3 -> Dv3 Series (approx). Use IFG from details when present.
+          const m = sku.match(/^Standard_([A-Z]+)[\w]*_v(\d+)/i); if (!m) return sku;
+          return `${m[1].toUpperCase()}v${m[2]} Series`;
         };
 
-        function initializeMSAL() {
-            const clientId = document.getElementById('clientId').value.trim();
-            const tenantId = document.getElementById('tenantId').value.trim();
-            
-            if (!clientId || !tenantId) {
-                showStatus('❌ Please enter both Client ID and Tenant ID', 'error');
-                return false;
-            }
-
-            azureConfig = {
-                clientId: clientId,
-                tenantId: tenantId,
-                subscriptionId: document.getElementById('subscriptionId').value.trim()
-            };
-
-            try {
-                msalInstance = new msal.PublicClientApplication({
-                    auth: {
-                        clientId: clientId,
-                        authority: `https://login.microsoftonline.com/${tenantId}`,
-                        redirectUri: window.location.origin
-                    },
-                    cache: {
-                        cacheLocation: "memory"
-                    }
-                });
-                
-                return true;
-                
-            } catch (error) {
-                console.error('❌ MSAL initialization error:', error);
-                showStatus(`❌ MSAL initialization failed: ${error.message}`, 'error');
-                return false;
-            }
-        }
-
-        async function authenticateAzure() {
-            if (!initializeMSAL()) return;
-
-            try {
-                showStatus('Authenticating with Azure...', 'info');
-                
-                const loginRequest = {
-                    scopes: ["https://management.azure.com/user_impersonation", "openid", "profile"]
-                };
-
-                const response = await msalInstance.loginPopup(loginRequest);
-                accessToken = response.accessToken;
-                
-                showStatus(`✅ Successfully authenticated as ${response.account.username}`, 'success');
-                
-                // Load real Azure data
-                await loadAzureData();
-                
-            } catch (error) {
-                console.error('Authentication failed:', error);
-                showStatus(`❌ Authentication failed: ${error.message}`, 'error');
-            }
-        }
-
-        async function loadAzureData() {
-    try {
-        showStatus('🔄 Fetching Azure reservation and VM data...', 'info');
-        
-        if (!accessToken || !azureConfig.subscriptionId) {
-            throw new Error('Missing access token or subscription ID');
-        }
-
-        const headers = {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-        };
-
-        // Run diagnostics first
-        showStatus('🔍 Running connectivity diagnostics...', 'info');
-        const diagnostics = await diagnoseAzureConnectivity();
-        
-        if (diagnostics.error) {
-            throw new Error(`Connectivity check failed: ${diagnostics.error}`);
-        }
-        
-        if (!diagnostics.subscriptionAccess) {
-            throw new Error('Cannot access subscription. Check your permissions.');
-        }
-        
-        if (!diagnostics.vmApiAccess) {
-            if (diagnostics.vmApiStatus === 502) {
-                showStatus('⚠️ Azure VM API is experiencing issues (502 error). Trying alternative methods...', 'info');
-            } else {
-                throw new Error(`VM API not accessible (${diagnostics.vmApiStatus}). Check your permissions.`);
-            }
-        }
-
-        // Fetch reservations and VMs in parallel with enhanced error handling
-        showStatus('📊 Fetching reservations and VM data...', 'info');
-        
-        const results = await Promise.allSettled([
-            fetchReservations(headers),
-            fetchVMs(headers)
-        ]);
-        
-        const reservationsResult = results[0];
-        const vmsResult = results[1];
-        
-        let reservationsData = [];
-        let vmsData = [];
-        
-        if (reservationsResult.status === 'fulfilled') {
-            reservationsData = reservationsResult.value;
-            console.log(`✅ Loaded ${reservationsData.length} reservations`);
-        } else {
-            console.warn('❌ Reservations fetch failed:', reservationsResult.reason);
-            showStatus('⚠️ Could not load reservations data, using VMs only...', 'info');
-        }
-        
-        if (vmsResult.status === 'fulfilled') {
-            vmsData = vmsResult.value;
-            console.log(`✅ Loaded ${vmsData.length} VM configurations`);
-        } else {
-            console.warn('❌ VMs fetch failed:', vmsResult.reason);
-            throw new Error(`Could not load VM data: ${vmsResult.reason.message}`);
-        }
-        
-        const processedData = {
-            reservations: reservationsData,
-            actualVMs: vmsData
-        };
-        
-        processGapAnalysis(processedData);
-        
-        let statusMessage = '✅ Real Azure data loaded successfully!';
-        if (reservationsData.length === 0) {
-            statusMessage += ' (No reservations found - showing VM usage only)';
-        }
-        showStatus(statusMessage, 'success');
-        
-    } catch (error) {
-        console.error('Data loading failed:', error);
-        
-        // Provide specific guidance based on error type
-        let errorMessage = `❌ Failed to load Azure data: ${error.message}`;
-        let shouldShowFallback = true;
-        
-        if (error.message.includes('502')) {
-            errorMessage += '\n\n💡 Azure is experiencing server issues. This is temporary - try again in a few minutes.';
-        } else if (error.message.includes('401') || error.message.includes('403')) {
-            errorMessage += '\n\n🔑 Permission issue. Ensure you have Reader role on the subscription.';
-            shouldShowFallback = false;
-        } else if (error.message.includes('subscription')) {
-            errorMessage += '\n\n📋 Check your Subscription ID is correct.';
-            shouldShowFallback = false;
-        }
-        
-        showStatus(errorMessage, 'error');
-        
-        if (shouldShowFallback) {
-            // Fallback to sample data with warning
-            setTimeout(() => {
-                showStatus('⚠️ Using sample data as fallback. Check console for detailed error information.', 'error');
-                processGapAnalysis(sampleData);
-            }, 3000);
-        }
-    }
-}
-
-async function fetchReservations(headers) {
-    try {
-        console.log('🎫 Fetching reservations...');
-        
-        // Try multiple approaches to get reservations
-        let reservations = [];
-        
-        // Approach 1: Get reservations scoped to subscription
-        try {
-            const subscriptionReservationsUrl = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Capacity/reservations?api-version=2022-03-01`;
-            const subResponse = await makeAzureApiCall(subscriptionReservationsUrl, headers);
-            
-            console.log(`📊 Found ${subResponse.value?.length || 0} subscription-scoped reservations`);
-            
-            for (const reservation of subResponse.value || []) {
-                const processed = processReservation(reservation);
-                if (processed) {
-                    reservations.push(processed);
-                }
-            }
-        } catch (error) {
-            console.warn('Subscription-scoped reservations failed:', error.message);
-        }
-        
-        // Approach 2: Get tenant-level reservation orders (if subscription approach didn't work)
-        if (reservations.length === 0) {
-            try {
-                const ordersUrl = `https://management.azure.com/providers/Microsoft.Capacity/reservationOrders?api-version=2022-03-01`;
-                const ordersResponse = await makeAzureApiCall(ordersUrl, headers);
-                
-                console.log(`📋 Found ${ordersResponse.value?.length || 0} reservation orders`);
-                
-                for (const order of ordersResponse.value || []) {
-                    // Get detailed reservations for each order
-                    if (order.properties?.reservations) {
-                        for (const reservationRef of order.properties.reservations) {
-                            try {
-                                const detailUrl = `https://management.azure.com${reservationRef.id}?api-version=2022-03-01`;
-                                const detail = await makeAzureApiCall(detailUrl, headers);
-                                
-                                const processed = processReservation(detail);
-                                if (processed) {
-                                    reservations.push(processed);
-                                }
-                            } catch (detailError) {
-                                console.warn(`Failed to get reservation detail for ${reservationRef.id}:`, detailError.message);
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                console.warn('Tenant-level reservations failed:', error.message);
-            }
-        }
-        
-        console.log(`✅ Total processed reservations: ${reservations.length}`);
-        return reservations;
-        
-    } catch (error) {
-        console.error('Error fetching reservations:', error);
-        throw new Error(`Failed to fetch reservations: ${error.message}`);
-    }
-}
-
-function processReservation(reservation) {
-    try {
-        const props = reservation.properties;
-        
-        // Log reservation details for debugging
-        console.log('🔍 Processing reservation:', {
-            sku: props?.sku?.name,
-            state: props?.provisioningState,
-            effective: props?.effectiveDateTime,
-            expiry: props?.expiryDateTime,
-            location: props?.location,
-            appliedScope: props?.appliedScopeType
-        });
-        
-        // More lenient filtering - include more reservation types
-        const isVMReservation = props?.sku?.name && (
-            props.sku.name.includes('VM') || 
-            props.sku.name.includes('Standard_') ||
-            props.sku.name.includes('Basic_')
-        );
-        
-        // Check if reservation is currently active (more flexible date checking)
-        const now = new Date();
-        const effectiveDate = props?.effectiveDateTime ? new Date(props.effectiveDateTime) : null;
-        const expiryDate = props?.expiryDateTime ? new Date(props.expiryDateTime) : null;
-        
-        const isActive = props?.provisioningState === 'Succeeded' &&
-                        (!effectiveDate || effectiveDate <= now) &&
-                        (!expiryDate || expiryDate > now);
-        
-        if (isVMReservation && isActive) {
-            // Try to extract region from various possible fields
-            let region = props?.location || 
-                        props?.appliedScopeProperties?.displayName || 
-                        props?.appliedScopeProperties?.resourceGroupName ||
-                        'Unknown';
-            
-            // Clean up region name
-            region = region.replace(/\s+/g, '').toLowerCase();
-            
-            const processed = {
-                region: region,
-                vmSize: props.sku.name,
-                quantity: props.quantity || 1,
-                cost: calculateReservationCost(props),
-                term: props.term || 'P1Y',
-                scope: props.appliedScopeType || 'Unknown',
-                id: reservation.id
-            };
-            
-            console.log('✅ Added reservation:', processed);
-            return processed;
-        } else {
-            console.log('⏭️ Skipped reservation:', {
-                isVM: isVMReservation,
-                isActive: isActive,
-                sku: props?.sku?.name
-            });
-        }
-        
-        return null;
-        
-    } catch (error) {
-        console.warn('Error processing reservation:', error);
-        return null;
-    }
-}
-
-async function fetchVMs(headers) {
-    try {
-        console.log('🔍 Attempting to fetch VMs with multiple strategies...');
-        
-        // Strategy 1: Try without instanceView expansion first (more reliable)
-        let vmsData = await tryFetchVMsBasic(headers);
-        
-        // If we got VMs, try to enrich with power states (but don't fail if this doesn't work)
-        if (vmsData.length > 0) {
-            console.log(`📊 Got ${vmsData.length} VMs, trying to get power states...`);
-            try {
-                const enrichedData = await enrichWithPowerStates(vmsData, headers);
-                if (enrichedData.length > 0) {
-                    vmsData = enrichedData;
-                    console.log('✅ Successfully enriched VMs with power states');
-                } else {
-                    console.log('⚠️ Power state enrichment failed, using all VMs as running');
-                }
-            } catch (error) {
-                console.warn('Power state enrichment failed, continuing with basic data:', error.message);
-                // Keep the basic data, just assume all VMs are running
-            }
-        }
-        
-        // Strategy 2: If basic fetch didn't work, try paginated approach
-        if (vmsData.length === 0) {
-            console.log('🔄 Basic fetch returned no VMs, trying paginated approach...');
-            vmsData = await tryFetchVMsPaginated(headers);
-        }
-        
-        // Strategy 3: If paginated fails, try Resource Graph API
-        if (vmsData.length === 0) {
-            console.log('🔄 Paginated fetch failed, trying Resource Graph API...');
-            vmsData = await tryResourceGraphAPI(headers);
-        }
-        
-        if (vmsData.length === 0) {
-            console.warn('❌ All VM fetch strategies failed');
-            return [];
-        }
-        
-        console.log(`📊 Total VMs found: ${vmsData.length}`);
-        
-        // Process and group VMs by region and size
-        const vmUsage = new Map();
-        let runningCount = 0;
-        let totalCount = 0;
-        
-        vmsData.forEach(vm => {
-            totalCount++;
-            const region = normalizeRegion(vm.location);
-            const vmSize = vm.vmSize;
-            const isRunning = vm.isRunning;
-            
-            // Debug logging for each VM
-            console.log(`🖥️ Processing: ${vm.name} | ${region} | ${vmSize} | Running: ${isRunning}`);
-            
-            if (region && vmSize) {
-                // Count ALL VMs, not just running ones (but track running separately)
-                if (isRunning) runningCount++;
-                
-                const key = `${region}-${vmSize}`;
-                const current = vmUsage.get(key) || { region, vmSize, quantity: 0, runningQuantity: 0 };
-                current.quantity += 1;
-                if (isRunning) current.runningQuantity += 1;
-                vmUsage.set(key, current);
-            }
-        });
-        
-        console.log(`✅ Processed ${totalCount} VMs total, ${runningCount} running, ${vmUsage.size} unique region/size combinations`);
-        
-        // Convert to array and use total quantity (not just running)
-        const result = Array.from(vmUsage.values()).map(vm => ({
-            region: vm.region,
-            vmSize: vm.vmSize,
-            quantity: vm.quantity, // Use total VMs, not just running
-            runningQuantity: vm.runningQuantity
+        const reservations = reservationsAgg.map(x => ({
+          ...x,
+          key: familyMode ? (x.family || toFamily(x.skuName)) : x.skuName
         }));
-        
-        console.log('📋 Final VM summary:', result);
-        return result;
-        
-    } catch (error) {
-        console.error('Error fetching VMs:', error);
-        throw new Error(`Failed to fetch VMs: ${error.message}`);
-    }
-}
 
-function normalizeRegion(location) {
-    if (!location) return 'Unknown';
-    
-    // Normalize region names to handle variations
-    const regionMap = {
-        'eastus': 'East US',
-        'eastus2': 'East US 2', 
-        'westus': 'West US',
-        'westus2': 'West US 2',
-        'westus3': 'West US 3',
-        'centralus': 'Central US',
-        'northcentralus': 'North Central US',
-        'southcentralus': 'South Central US',
-        'westcentralus': 'West Central US',
-        'canadacentral': 'Canada Central',
-        'canadaeast': 'Canada East',
-        'westeurope': 'West Europe',
-        'northeurope': 'North Europe',
-        'uksouth': 'UK South',
-        'ukwest': 'UK West',
-        'francecentral': 'France Central',
-        'germanywestcentral': 'Germany West Central',
-        'norwayeast': 'Norway East',
-        'switzerlandnorth': 'Switzerland North',
-        'swedencentral': 'Sweden Central',
-        'southeastasia': 'Southeast Asia',
-        'eastasia': 'East Asia',
-        'australiaeast': 'Australia East',
-        'australiasoutheast': 'Australia Southeast',
-        'japaneast': 'Japan East',
-        'japanwest': 'Japan West',
-        'koreacentral': 'Korea Central',
-        'koreasouth': 'Korea South',
-        'southindia': 'South India',
-        'centralindia': 'Central India',
-        'westindia': 'West India',
-        'brazilsouth': 'Brazil South',
-        'southafricanorth': 'South Africa North'
-    };
-    
-    const normalized = location.toLowerCase().replace(/\s+/g, '');
-    return regionMap[normalized] || location;
-}
+        const runningKeyed = runningNow.map(x => ({
+          ...x,
+          key: familyMode ? toFamily(x.skuName) : x.skuName
+        }));
 
-async function tryFetchVMsBasic(headers) {
-    try {
-        console.log('📍 Strategy 1: Basic VM fetch without instanceView...');
-        const vmsUrl = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Compute/virtualMachines?api-version=2023-03-01`;
-        
-        const response = await makeAzureApiCall(vmsUrl, headers);
-        
-        const vms = (response.value || []).map(vm => {
-            console.log('🖥️ Found VM:', {
-                name: vm.name,
-                location: vm.location,
-                vmSize: vm.properties?.hardwareProfile?.vmSize,
-                resourceGroup: vm.id.split('/')[4]
-            });
-            
-            return {
-                id: vm.id,
-                name: vm.name,
-                location: vm.location,
-                vmSize: vm.properties?.hardwareProfile?.vmSize,
-                resourceGroup: vm.id.split('/')[4],
-                isRunning: true // Will verify later if possible
-            };
-        });
-        
-        console.log(`📊 Basic fetch found ${vms.length} VMs total`);
-        return vms;
-        
-    } catch (error) {
-        console.warn('Basic VM fetch failed:', error.message);
-        return [];
-    }
-}
-
-async function enrichWithPowerStates(vmsData, headers) {
-    console.log(`🔋 Strategy 2: Enriching ${vmsData.length} VMs with power states...`);
-    const enrichedVMs = [];
-    
-    // Process VMs in smaller batches to avoid rate limiting
-    const batchSize = 5;
-    let successCount = 0;
-    let runningCount = 0;
-    
-    for (let i = 0; i < vmsData.length; i += batchSize) {
-        const batch = vmsData.slice(i, i + batchSize);
-        console.log(`🔄 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(vmsData.length/batchSize)}`);
-        
-        const batchPromises = batch.map(async (vm) => {
-            try {
-                const statusUrl = `${vm.id}/instanceView?api-version=2023-03-01`;
-                const statusResponse = await makeAzureApiCall(`https://management.azure.com${statusUrl}`, headers);
-                
-                const powerState = statusResponse.statuses?.find(
-                    status => status.code?.startsWith('PowerState/')
-                );
-                
-                const isRunning = powerState?.code === 'PowerState/running';
-                
-                console.log(`⚡ ${vm.name}: ${powerState?.code || 'unknown'}`);
-                
-                if (isRunning) runningCount++;
-                successCount++;
-                
-                return { ...vm, isRunning, powerState: powerState?.code };
-                
-            } catch (error) {
-                console.warn(`⚠️ Failed to get status for ${vm.name}: ${error.message}`);
-                // For VMs we can't check, assume they're running (conservative approach)
-                runningCount++;
-                return { ...vm, isRunning: true, powerState: 'assumed-running' };
-            }
-        });
-        
-        const batchResults = await Promise.allSettled(batchPromises);
-        batchResults.forEach(result => {
-            if (result.status === 'fulfilled') {
-                enrichedVMs.push(result.value);
-            }
-        });
-        
-        // Rate limiting: wait between batches
-        if (i + batchSize < vmsData.length) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-    }
-    
-    console.log(`✅ Power state check complete: ${successCount}/${vmsData.length} VMs checked, ${runningCount} running`);
-    return enrichedVMs;
-}
-
-async function tryFetchVMsPaginated(headers) {
-    try {
-        console.log('📄 Strategy 3: Paginated VM fetch...');
-        const allVMs = [];
-        let nextLink = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Compute/virtualMachines?api-version=2023-03-01&$top=100`;
-        let pageCount = 0;
-        
-        while (nextLink && allVMs.length < 2000 && pageCount < 20) { // Safety limits
-            pageCount++;
-            console.log(`📄 Fetching page ${pageCount}...`);
-            
-            const response = await makeAzureApiCall(nextLink, headers);
-            
-            const vms = (response.value || []).map(vm => ({
-                id: vm.id,
-                name: vm.name,
-                location: vm.location,
-                vmSize: vm.properties?.hardwareProfile?.vmSize,
-                resourceGroup: vm.id.split('/')[4],
-                isRunning: true // Conservative assumption for paginated fetch
-            }));
-            
-            console.log(`📊 Page ${pageCount}: ${vms.length} VMs`);
-            allVMs.push(...vms);
-            nextLink = response.nextLink;
-            
-            // Rate limiting between pages
-            if (nextLink) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
-        }
-        
-        console.log(`✅ Paginated fetch complete: ${allVMs.length} VMs across ${pageCount} pages`);
-        return allVMs;
-        
-    } catch (error) {
-        console.warn('Paginated VM fetch failed:', error.message);
-        return [];
-    }
-}
-
-async function tryResourceGraphAPI(headers) {
-    try {
-        console.log('🔍 Strategy 4: Trying Azure Resource Graph API...');
-        
-        const query = {
-            subscriptions: [azureConfig.subscriptionId],
-            query: `
-                Resources
-                | where type == "microsoft.compute/virtualmachines"
-                | extend vmSize = properties.hardwareProfile.vmSize
-                | extend powerState = tostring(properties.extended.instanceView.powerState.code)
-                | project name, location, vmSize, powerState, resourceGroup
-            `
+        // 6) Build unified matrix by region+key
+        const index = new Map();
+        const upsert = (region, key, obj) => {
+          const k = `${region}|${key}`;
+          const cur = index.get(k) || { region, key, reserved: 0, avgUsed: 0, running: 0 };
+          index.set(k, { ...cur, ...obj, reserved: cur.reserved + (obj.reserved || 0), avgUsed: cur.avgUsed + (obj.avgUsed || 0), running: cur.running + (obj.running || 0) });
         };
-        
-        const graphUrl = 'https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01';
-        const response = await fetch(graphUrl, {
-            method: 'POST',
-            headers: {
-                ...headers,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(query)
-        });
-        
-        if (response.ok) {
-            const result = await response.json();
-            const vms = (result.data || []).map(row => {
-                const [name, location, vmSize, powerState, resourceGroup] = row;
-                const isRunning = !powerState || powerState === 'PowerState/running' || powerState === 'running';
-                
-                console.log(`🔍 Resource Graph VM: ${name} (${powerState || 'unknown'})`);
-                
-                return {
-                    name,
-                    location,
-                    vmSize,
-                    resourceGroup,
-                    isRunning,
-                    powerState
-                };
-            });
-            
-            console.log(`✅ Resource Graph found ${vms.length} VMs`);
-            return vms;
-        } else {
-            console.warn(`Resource Graph API failed: ${response.status}`);
-        }
-        
-    } catch (error) {
-        console.warn('Resource Graph API failed:', error.message);
+
+        reservations.forEach(r => upsert(r.region, r.key, { reserved: r.reservedQty, avgUsed: r.avgUsed }));
+        runningKeyed.forEach(r => upsert(r.region, r.key, { running: r.running }));
+
+        // 7) Convert to array of rows
+        const rows = Array.from(index.values()).sort((a,b) => (a.region+a.key).localeCompare(b.region+b.key));
+
+        // 8) Update UI
+        processGapAnalysis({ rows, rawReservations: reservationsAgg, rawRunning: runningNow });
+        showStatus('Live data loaded.', 'success');
+      } catch (err) {
+        console.error(err);
+        showStatus(`Failed to load Azure data: ${err.message}`, 'error');
+      }
     }
-    
-    return [];
-}
 
-function calculateReservationCost(reservationProps) {
-    // Estimate monthly cost based on reservation properties
-    // This is a simplified calculation - actual billing data would require different APIs
-    
-    const quantity = reservationProps.quantity || 1;
-    const term = reservationProps.term || 'P1Y';
-    
-    // Basic cost estimates per VM size per month (these would come from Azure pricing API in production)
-    const costEstimates = {
-        'Standard_D2s_v3': 100,
-        'Standard_D4s_v3': 200,
-        'Standard_D8s_v3': 400,
-        'Standard_D16s_v3': 800,
-        'Standard_E2s_v3': 120,
-        'Standard_E4s_v3': 240,
-        'Standard_E8s_v3': 480,
-        'Standard_F2s_v2': 80,
-        'Standard_F4s_v2': 160,
-        'Standard_F8s_v2': 320
-    };
-    
-    const vmSize = reservationProps.sku?.name || '';
-    const baseCost = costEstimates[vmSize] || 150; // Default estimate
-    
-    // Apply reservation discount (typically 30-70% off pay-as-you-go)
-    const reservationDiscount = 0.4; // 40% discount
-    const monthlyCost = baseCost * quantity * (1 - reservationDiscount);
-    
-    return Math.round(monthlyCost);
-}
+    // ====== Analysis + UI
+    function processGapAnalysis(payload) {
+      let rows;
+      if (payload.rows) {
+        rows = payload.rows.map(r => ({
+          region: toTitle(r.region),
+          vmKey: r.key,
+          reserved: r.reserved,
+          avgUsed: Number(r.avgUsed.toFixed(1)),
+          running: r.running,
+          gapNow: Number((r.reserved - r.running).toFixed(1))
+        }));
+      } else {
+        // sample fallback
+        const by = new Map();
+        const up = (k, o) => { const v = by.get(k) || { region: o.region, vmKey: o.skuName, reserved: 0, avgUsed: 0, running: 0 }; by.set(k, { ...v, reserved: v.reserved + (o.reservedQty||0), avgUsed: v.avgUsed + (o.avgUsed||0) }); };
+        payload.reservations.forEach(r => up(`${r.region}|${r.skuName}`, r));
+        payload.runningNow.forEach(r => { const k = `${r.region}|${r.skuName}`; const v = by.get(k) || { region: r.region, vmKey: r.skuName, reserved: 0, avgUsed: 0, running: 0 }; v.running += r.running; by.set(k, v); });
+        rows = Array.from(by.values()).map(r => ({ region: toTitle(r.region), vmKey: r.vmKey, reserved: r.reserved, avgUsed: Number(r.avgUsed.toFixed(1)), running: r.running, gapNow: Number((r.reserved - r.running).toFixed(1)) }));
+      }
 
-// Additional helper function to refresh access token if needed
-async function ensureValidToken() {
-    try {
-        if (!msalInstance) {
-            throw new Error('MSAL not initialized');
-        }
-        
-        const accounts = msalInstance.getAllAccounts();
-        if (accounts.length === 0) {
-            throw new Error('No authenticated accounts found');
-        }
-        
-        const silentRequest = {
-            scopes: ["https://management.azure.com/user_impersonation"],
-            account: accounts[0]
-        };
-        
-        const response = await msalInstance.acquireTokenSilent(silentRequest);
-        accessToken = response.accessToken;
-        return true;
-        
-    } catch (error) {
-        console.warn('Silent token acquisition failed, may need re-authentication:', error);
-        return false;
+      // metrics
+      const totalReservations = rows.reduce((s, r) => s + r.reserved, 0);
+      const totalRunning = rows.reduce((s, r) => s + r.running, 0);
+      const avgUtilization = rows.reduce((s, r) => s + Math.min(r.avgUsed, r.reserved), 0) / (totalReservations || 1) * 100;
+      const estMonthlyGapCost = rows.reduce((s, r) => s + Math.max(0, r.reserved - r.avgUsed), 0) * 24 * 30 * 0; // left as 0 without rate card
+
+      document.getElementById('totalReservations').textContent = totalReservations.toLocaleString();
+      document.getElementById('activeVMs').textContent = totalRunning.toLocaleString();
+      document.getElementById('utilizationRate').textContent = `${avgUtilization.toFixed(1)}%`;
+      document.getElementById('costImpact').textContent = '$' + estMonthlyGapCost.toLocaleString();
+
+      // charts
+      makeRegionChart(rows);
+      makeSizeChart(rows);
+
+      // table
+      const tbody = document.getElementById('gapTableBody');
+      tbody.innerHTML = '';
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        const gapClass = r.gapNow > 0 ? 'gap-negative' : r.gapNow < 0 ? 'gap-positive' : '';
+        tr.innerHTML = `<td>${r.region}</td><td>${r.vmKey}</td><td>${r.reserved}</td><td>${r.avgUsed}</td><td>${r.running}</td><td class="${gapClass}">${r.gapNow > 0 ? '+' : ''}${r.gapNow}</td><td>${recommend(r)}</td>`;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('dashboard').classList.add('active');
     }
-}
 
-// Enhanced error handling and retry logic with 502-specific handling
-async function makeAzureApiCall(url, headers, retries = 3) {
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        try {
-            console.log(`🌐 API Call attempt ${attempt + 1}: ${url.split('?')[0]}`);
-            
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-            
-            const response = await fetch(url, { 
-                headers,
-                signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            
-            // Handle specific error cases
-            if (response.status === 401 && attempt < retries) {
-                console.log('🔄 Token expired, refreshing...');
-                const tokenRefreshed = await ensureValidToken();
-                if (tokenRefreshed) {
-                    headers['Authorization'] = `Bearer ${accessToken}`;
-                    continue;
-                }
-            }
-            
-            if (response.status === 502 || response.status === 503 || response.status === 504) {
-                if (attempt < retries) {
-                    const delay = Math.min(1000 * Math.pow(2, attempt), 10000); // Exponential backoff, max 10s
-                    console.warn(`⚠️ Server error ${response.status}, retrying in ${delay}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    continue;
-                }
-            }
-            
-            if (response.status === 429) { // Rate limited
-                const retryAfter = response.headers.get('Retry-After') || '60';
-                const delay = Math.min(parseInt(retryAfter) * 1000, 30000); // Max 30s wait
-                console.warn(`⏱️ Rate limited, waiting ${delay}ms...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-                continue;
-            }
-            
-            if (!response.ok) {
-                throw new Error(`API call failed: ${response.status} ${response.statusText}`);
-            }
-            
-            return await response.json();
-            
-        } catch (error) {
-            if (error.name === 'AbortError') {
-                console.warn('⏰ Request timeout');
-            }
-            
-            if (attempt === retries) {
-                throw error;
-            }
-            
-            const delay = Math.min(1000 * (attempt + 1), 5000);
-            console.warn(`💥 Attempt ${attempt + 1} failed, retrying in ${delay}ms...`, error.message);
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
+    function recommend(r) {
+      if (r.gapNow > 0) {
+        const pct = (r.gapNow / (r.reserved || 1)) * 100;
+        if (pct > 50) return 'Reduce / split reservation';
+        if (pct > 20) return 'Monitor & right-size';
+        return 'Minor over-provisioning';
+      }
+      if (r.gapNow < 0) return 'Consider more reservations';
+      return 'Optimal';
     }
-}
 
-// Add a diagnostic function to help troubleshoot
-async function diagnoseAzureConnectivity() {
-    console.log('🔍 Running Azure connectivity diagnostics...');
-    
-    try {
-        // Test basic subscription access
-        const subscriptionUrl = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}?api-version=2020-01-01`;
-        const headers = {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-        };
-        
-        const subResponse = await fetch(subscriptionUrl, { headers });
-        console.log(`📊 Subscription access: ${subResponse.status} ${subResponse.statusText}`);
-        
-        if (subResponse.ok) {
-            const subData = await subResponse.json();
-            console.log(`✅ Subscription: ${subData.displayName} (${subData.state})`);
-        }
-        
-        // Test VM API availability with minimal call
-        const vmTestUrl = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Compute/virtualMachines?api-version=2023-03-01&$top=1`;
-        const vmResponse = await fetch(vmTestUrl, { headers });
-        console.log(`🖥️ VM API access: ${vmResponse.status} ${vmResponse.statusText}`);
-        
-        return {
-            subscriptionAccess: subResponse.ok,
-            vmApiAccess: vmResponse.ok,
-            vmApiStatus: vmResponse.status
-        };
-        
-    } catch (error) {
-        console.error('❌ Diagnostics failed:', error);
-        return { error: error.message };
+    function makeRegionChart(rows) {
+      const byRegion = new Map();
+      for (const r of rows) {
+        const v = byRegion.get(r.region) || { reserved: 0, running: 0 };
+        v.reserved += r.reserved; v.running += r.running; byRegion.set(r.region, v);
+      }
+      const labels = Array.from(byRegion.keys());
+      const reserved = labels.map(l => byRegion.get(l).reserved);
+      const running = labels.map(l => byRegion.get(l).running);
+      const ctx = document.getElementById('regionChart').getContext('2d');
+      regionChart && regionChart.destroy();
+      regionChart = new Chart(ctx, { type: 'bar', data: { labels, datasets: [ { label: 'Reserved', data: reserved, backgroundColor: 'rgba(102,126,234,.8)', borderColor: 'rgba(102,126,234,1)', borderWidth: 2, borderRadius: 8 }, { label: 'Running', data: running, backgroundColor: 'rgba(118,75,162,.8)', borderColor: 'rgba(118,75,162,1)', borderWidth: 2, borderRadius: 8 } ] }, options: { responsive: true, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.05)' } }, x: { grid: { display: false } } } } });
     }
-}
 
-        function loadSampleData() {
-            showStatus('📊 Loading sample data for demonstration...', 'info');
-            setTimeout(() => {
-                processGapAnalysis(sampleData);
-                showStatus('✅ Sample data loaded! This demonstrates the analysis with mock Azure data.', 'success');
-            }, 1000);
-        }
+    function makeSizeChart(rows) {
+      const byKey = new Map();
+      for (const r of rows) {
+        const v = byKey.get(r.vmKey) || { gap: 0 };
+        v.gap += Math.abs(r.gapNow); byKey.set(r.vmKey, v);
+      }
+      const labels = Array.from(byKey.keys());
+      const data = labels.map(l => byKey.get(l).gap);
+      const ctx = document.getElementById('sizeChart').getContext('2d');
+      sizeChart && sizeChart.destroy();
+      sizeChart = new Chart(ctx, { type: 'doughnut', data: { labels, datasets: [{ data, backgroundColor: ['rgba(102,126,234,.8)','rgba(118,75,162,.8)','rgba(255,107,107,.8)','rgba(81,207,102,.8)','rgba(255,193,7,.8)'], borderWidth: 3, borderColor: '#fff' }] }, options: { responsive: true, plugins: { legend: { position: 'right' } } } });
+    }
 
-        function processGapAnalysis(data) {
-            const { reservations, actualVMs } = data;
-            
-            // Calculate gaps
-            const gaps = calculateGaps(reservations, actualVMs);
-            
-            // Update metrics
-            updateMetrics(reservations, actualVMs, gaps);
-            
-            // Create charts
-            createRegionChart(gaps);
-            createSizeChart(gaps);
-            
-            // Populate table
-            populateGapTable(gaps);
-            
-            // Show dashboard
-            document.getElementById('dashboard').classList.add('active');
-        }
+    function toTitle(region) {
+      if (!region) return '';
+      return region.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
 
-        function calculateGaps(reservations, actualVMs) {
-            const gaps = [];
-            const reservationMap = new Map();
-            const usageMap = new Map();
-            
-            // Index reservations and actual VMs
-            reservations.forEach(r => {
-                const key = `${r.region}-${r.vmSize}`;
-                reservationMap.set(key, r);
-            });
-            
-            actualVMs.forEach(vm => {
-                const key = `${vm.region}-${vm.vmSize}`;
-                usageMap.set(key, vm);
-            });
-            
-            // Find all unique combinations
-            const allKeys = new Set([...reservationMap.keys(), ...usageMap.keys()]);
-            
-            allKeys.forEach(key => {
-                const [region, vmSize] = key.split('-');
-                const reservation = reservationMap.get(key);
-                const usage = usageMap.get(key);
-                
-                const reserved = reservation ? reservation.quantity : 0;
-                const actual = usage ? usage.quantity : 0;
-                const gap = reserved - actual;
-                const cost = reservation ? reservation.cost : 0;
-                
-                gaps.push({
-                    region,
-                    vmSize,
-                    reserved,
-                    actual,
-                    gap,
-                    costImpact: gap > 0 ? (gap / reserved) * cost : 0,
-                    recommendation: getRecommendation(gap, reserved, actual)
-                });
-            });
-            
-            return gaps;
-        }
+    function showStatus(msg, type='info') {
+      const el = document.getElementById('authStatus');
+      el.className = `status ${type}`;
+      el.textContent = msg;
+    }
 
-        function getRecommendation(gap, reserved, actual) {
-            if (gap > 0) {
-                const wastePercentage = (gap / reserved) * 100;
-                if (wastePercentage > 50) return 'Consider reducing reservation';
-                if (wastePercentage > 20) return 'Monitor usage trends';
-                return 'Minor over-provisioning';
-            } else if (gap < 0) {
-                return 'Consider additional reservations';
-            }
-            return 'Optimal utilization';
-        }
-
-        function updateMetrics(reservations, actualVMs, gaps) {
-            const totalReservations = reservations.reduce((sum, r) => sum + r.quantity, 0);
-            const totalVMs = actualVMs.reduce((sum, vm) => sum + vm.quantity, 0);
-            const utilizationRate = totalReservations > 0 ? ((totalVMs / totalReservations) * 100).toFixed(1) : 0;
-            const totalCostImpact = gaps.reduce((sum, g) => sum + Math.abs(g.costImpact), 0);
-            
-            document.getElementById('totalReservations').textContent = totalReservations;
-            document.getElementById('activeVMs').textContent = totalVMs;
-            document.getElementById('utilizationRate').textContent = `${utilizationRate}%`;
-            document.getElementById('costImpact').textContent = `$${totalCostImpact.toLocaleString()}`;
-        }
-
-        function createRegionChart(gaps) {
-            const ctx = document.getElementById('regionChart').getContext('2d');
-            
-            const regions = [...new Set(gaps.map(g => g.region))];
-            const reservedData = regions.map(region => 
-                gaps.filter(g => g.region === region).reduce((sum, g) => sum + g.reserved, 0)
-            );
-            const actualData = regions.map(region => 
-                gaps.filter(g => g.region === region).reduce((sum, g) => sum + g.actual, 0)
-            );
-
-            new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: regions,
-                    datasets: [
-                        {
-                            label: 'Reserved',
-                            data: reservedData,
-                            backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                            borderColor: 'rgba(102, 126, 234, 1)',
-                            borderWidth: 2,
-                            borderRadius: 8
-                        },
-                        {
-                            label: 'Actual Usage',
-                            data: actualData,
-                            backgroundColor: 'rgba(118, 75, 162, 0.8)',
-                            borderColor: 'rgba(118, 75, 162, 1)',
-                            borderWidth: 2,
-                            borderRadius: 8
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: {
-                            position: 'top',
-                        },
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            grid: {
-                                color: 'rgba(0, 0, 0, 0.05)'
-                            }
-                        },
-                        x: {
-                            grid: {
-                                display: false
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        function createSizeChart(gaps) {
-            const ctx = document.getElementById('sizeChart').getContext('2d');
-            
-            const vmSizes = [...new Set(gaps.map(g => g.vmSize))];
-            const gapData = vmSizes.map(size => {
-                const sizeGaps = gaps.filter(g => g.vmSize === size);
-                return sizeGaps.reduce((sum, g) => sum + g.gap, 0);
-            });
-
-            new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: vmSizes,
-                    datasets: [{
-                        data: gapData.map(Math.abs),
-                        backgroundColor: [
-                            'rgba(102, 126, 234, 0.8)',
-                            'rgba(118, 75, 162, 0.8)',
-                            'rgba(255, 107, 107, 0.8)',
-                            'rgba(81, 207, 102, 0.8)',
-                            'rgba(255, 193, 7, 0.8)'
-                        ],
-                        borderWidth: 3,
-                        borderColor: '#fff'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: {
-                            position: 'right',
-                        }
-                    }
-                }
-            });
-        }
-
-        function populateGapTable(gaps) {
-            const tbody = document.getElementById('gapTableBody');
-            tbody.innerHTML = '';
-            
-            gaps.forEach(gap => {
-                const row = document.createElement('tr');
-                const gapClass = gap.gap > 0 ? 'gap-negative' : gap.gap < 0 ? 'gap-positive' : '';
-                const gapSign = gap.gap > 0 ? '+' : '';
-                
-                row.innerHTML = `
-                    <td>${gap.region}</td>
-                    <td>${gap.vmSize}</td>
-                    <td>${gap.reserved}</td>
-                    <td>${gap.actual}</td>
-                    <td class="${gapClass}">${gapSign}${gap.gap}</td>
-                    <td>$${Math.round(gap.costImpact).toLocaleString()}</td>
-                    <td>${gap.recommendation}</td>
-                `;
-                tbody.appendChild(row);
-            });
-        }
-
-        function showStatus(message, type) {
-            const statusDiv = document.getElementById('authStatus');
-            statusDiv.className = `status ${type}`;
-            statusDiv.textContent = message;
-        }
-
-        // Initialize on page load
-        window.addEventListener('load', () => {
-            // Check if MSAL loaded properly
-            setTimeout(() => {
-                if (typeof msal === 'undefined') {
-                    showStatus('❌ Azure authentication library failed to load. Try refreshing the page or use PowerShell method.', 'error');
-                    showPowerShellAlternative();
-                } else {
-                    showStatus('✅ Ready! Configure your Azure settings and click "Connect to Azure" or try "Load Sample Data"', 'success');
-                }
-            }, 1000); // Give time for library to load
-        });
-
-        function showPowerShellAlternative() {
-            const authSection = document.querySelector('.auth-section');
-            const powershellDiv = document.createElement('div');
-            powershellDiv.className = 'status info';
-            powershellDiv.style.marginTop = '20px';
-            powershellDiv.innerHTML = `
-                <h4>💡 Alternative: PowerShell Method</h4>
-                <p>If Azure authentication doesn't work, extract your data using PowerShell:</p>
-                <div class="code">
-# Connect to Azure
-Connect-AzAccount
-
-# Get reservations
-$reservations = Get-AzReservation | Where-Object {$_.Sku.Name -like "*VM*"}
-
-# Get current VMs
-$vms = Get-AzVM -Status | Where-Object {$_.PowerState -eq "VM running"}
-
-# Group and export
-$vms | Group-Object Location, HardwareProfile.VmSize | 
-    ForEach-Object {
-        [PSCustomObject]@{
-            Region = $_.Group[0].Location
-            VMSize = $_.Group[0].HardwareProfile.VmSize  
-            ActualQuantity = $_.Count
-        }
-    } | Export-Csv "current_vms.csv" -NoTypeInformation
-
-Write-Host "Upload current_vms.csv and compare with reservations manually"
-                </div>
-            `;
-            authSection.appendChild(powershellDiv);
-        }
-    </script>
+    // ====== Optional: proxy pattern (Azure Function)
+    /*
+    If you encounter CORS or want to hide ARM calls, deploy a Function App with Managed Identity and expose two endpoints:
+      GET  /api/reservation-summary   -> returns the array built in steps (3) above
+      POST /api/arg-running           -> runs the ARG query for the posted subscriptions
+    Grant the MI: Reservations Reader on /providers/Microsoft.Capacity, Cost Management Reader, and Reader on target subs.
+    Then replace armGET/armPOST with fetch('https://<func>.azurewebsites.net/api/...').
+    */
+  </script>
 </body>
 </html>
