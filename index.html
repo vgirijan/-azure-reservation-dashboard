@@ -1,26 +1,4 @@
-const skuToFamily = new Map();
-        const ratioBySku = new Map();
-        reservationsAgg.forEach(x => {
-          const s = String(x.skuName || '').toLowerCase();
-          if (s && x.family && String(x.family).toLowerCase() !== 'na') skuToFamily.set(s, x.family);
-          if (s) ratioBySku.set(s, Number(x.ratio || 1));
-        });
-        const keyFor = (sku, family) => {
-          if (!familyMode) return sku;
-          const fam = (family && String(family).toLowerCase() !== 'na') ? family : skuToFamily.get(String(sku).toLowerCase());
-          return fam || sku;
-        };const byRes = new Map();
-          rows.forEach(item => {
-            const p = item.properties || {};
-            const rid = p.reservationId?.split('/').pop();
-            if (!rid || !allowedResIds.has(rid)) return;
-            const entry = byRes.get(rid) || { usedHours: 0, days: 0, reservedQty: 0, skuName: p.skuName, ifg: p.instanceFlexibilityGroup, ifgRatio: Number(p.instanceFlexibilityRatio || 1) };
-            entry.usedHours += Number(p.usedHours || 0);
-            entry.days += 1;
-            entry.reservedQty = Math.max(entry.reservedQty, Number(p.totalReservedQuantity || 0));
-            if (p.instanceFlexibilityRatio) entry.ifgRatio = Number(p.instanceFlexibilityRatio);
-            byRes.set(rid, entry);
-          });<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -385,10 +363,11 @@ const skuToFamily = new Map();
             const p = item.properties || {};
             const rid = p.reservationId?.split('/').pop();
             if (!rid || !allowedResIds.has(rid)) return;
-            const entry = byRes.get(rid) || { usedHours: 0, days: 0, reservedQty: 0, skuName: p.skuName, ifg: p.instanceFlexibilityGroup };
+            const entry = byRes.get(rid) || { usedHours: 0, days: 0, reservedQty: 0, skuName: p.skuName, ifg: p.instanceFlexibilityGroup, ifgRatio: Number(p.instanceFlexibilityRatio || 1) };
             entry.usedHours += Number(p.usedHours || 0);
             entry.days += 1;
             entry.reservedQty = Math.max(entry.reservedQty, Number(p.totalReservedQuantity || 0));
+            if (p.instanceFlexibilityRatio) entry.ifgRatio = Number(p.instanceFlexibilityRatio);
             byRes.set(rid, entry);
           });
 
@@ -438,9 +417,6 @@ const skuToFamily = new Map();
         const runningKeyed = runningNow.map(x => ({
           ...x,
           key: keyFor(x.skuName)
-        }));(x => ({
-          ...x,
-          key: familyMode ? toFamily(x.skuName) : x.skuName
         }));
 
         // Normalize running to IFG units when family mode is on
@@ -536,9 +512,9 @@ const skuToFamily = new Map();
         const cc = rows.filter(r=>/canada ?central/i.test(r.region));
         if (cc.length) {
           const top = cc.sort((a,b)=>b.reserved-a.reserved).slice(0,5).map(r=>`${r.region} | ${r.vmKey} -> reserved ${r.reserved}, avgUsed ${r.avgUsed}, count ${r.running}`);
-          dbg.push('Top Canada Central rows by reserved:
-' + top.join('
-'));
+          dbg.push(`Top Canada Central rows by reserved:
+${top.join('
+')}`);
         }
         const out = document.getElementById('debugOut'); if (out) out.textContent = dbg.join('
 ');
