@@ -278,16 +278,53 @@
         const orderIds = (orders.value || []).map(o => o.name);
         if (!orderIds.length) { showStatus('No reservation orders found in tenant.', 'error'); return; }
 
-        // 2) For each order, list Reservations and map reservationId -> region + sku
+        // Read filters from UI now (used below)
+        const familyMode = document.getElementById('familyMode').checked;
+        const statusSucceededOnly = document.getElementById('statusFilterSucceeded')?.checked ?? true;
+        const scopeFilterText = (document.getElementById('scopeFilter')?.value || '').trim().toLowerCase();
+
+        // 2) For each order, list Reservations and map reservationId -> region + sku + scope (apply filters)
         const reservationMeta = new Map();
-        const allowedResIds = new Set(reservationMeta.keys());
         for (const orderId of orderIds) {
-          const details = await armGET(`/providers/Microsoft.Capacity/reservationorders/${orderId}/providers/Microsoft.Consumption/reservationDetails?$filter=${encodeURIComponent(filter)}&api-version=${CONSUMPTION_API_VERSION}`);
+          const reservations = await armGET(`/providers/Microsoft.Capacity/reservationOrders/${orderId}/reservations?api-version=${RESERVATION_API_VERSION}`);
+          (reservations.value || []).forEach(r => {
+            const p = r.properties || {};
+            const prov = String(p.provisioningState || '').toLowerCase();
+            if (statusSucceededOnly && prov !== 'succeeded') return;
+
+            const region = (r.location || p.location || '').toLowerCase();
+            const skuName = (r.sku && r.sku.name) || (p.sku && p.sku.name) || 'Unknown';
+
+            const appliedType = String(p.appliedScopeType || '').toLowerCase();
+            const displayName = (p.appliedScopeProperties && p.appliedScopeProperties.displayName) ? p.appliedScopeProperties.displayName : '';
+            const scopeLabel = appliedType === 'single' ? `single subscription - ${displayName}` : appliedType;
+
+            if (scopeFilterText && scopeLabel.toLowerCase() !== scopeFilterText) return;
+
+            const subRid = p.appliedScopeProperties && p.appliedScopeProperties.subscriptionId;
+            let scopeSubId = null;
+            if (subRid) {
+              const m = String(subRid).match(/\/subscriptions\/([0-9a-f-]+)/i);
+              scopeSubId = m ? m[1] : null;
+            }
+            reservationMeta.set(r.name, { region, skuName, orderId, scopeLabel, scopeSubId });
+          });
+        }
+
+        // 3) Reservation Details (last 30d) to compute avg used per reservation
+        const end = new Date(); end.setUTCDate(end.getUTCDate() - 1);
+        const start = new Date(end); start.setUTCDate(end.getUTCDate() - 29);
+        const dateFilter = `properties/usageDate ge ${start.toISOString().split('T')[0]} AND properties/usageDate le ${end.toISOString().split('T')[0]}`;
+
+        const allowedResIds = new Set(reservationMeta.keys());
+        const reservationsAgg = [];
+        for (const orderId of orderIds) {
+          const details = await armGET(`/providers/Microsoft.Capacity/reservationorders/${orderId}/providers/Microsoft.Consumption/reservationDetails?$filter=${encodeURIComponent(dateFilter)}&api-version=${CONSUMPTION_API_VERSION}`);
           const rows = details.value || [];
-          // group by reservationId
           const byRes = new Map();
           rows.forEach(item => {
-            const p = item.properties || {}; const rid = p.reservationId?.split('/').pop();
+            const p = item.properties || {};
+            const rid = p.reservationId?.split('/').pop();
             if (!rid || !allowedResIds.has(rid)) return;
             const entry = byRes.get(rid) || { usedHours: 0, days: 0, reservedQty: 0, skuName: p.skuName, ifg: p.instanceFlexibilityGroup };
             entry.usedHours += Number(p.usedHours || 0);
@@ -306,9 +343,6 @@
         // 4) Get current running VMs by size+region via Resource Graph
         showStatus('Querying Resource Graph for running VMs…', 'info');
         const subs = azureConfig.subscriptions; // can be empty => tenant scope (needs extra perms)
-        const familyMode = document.getElementById('familyMode').checked;
-        const statusSucceededOnly = document.getElementById('statusFilterSucceeded')?.checked ?? true;
-        const scopeFilterText = (document.getElementById('scopeFilter')?.value || '').trim().toLowerCase();
 
         const kql = `Resources\n| where type =~ 'microsoft.compute/virtualmachines'\n| extend vmSize = tostring(properties.hardwareProfile.vmSize), state = tostring(properties.extended.instanceView.powerState.code)\n| where state =~ 'PowerState/running'\n| summarize running = count() by region = tolower(location), vmSize`;
 
