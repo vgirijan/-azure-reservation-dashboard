@@ -595,61 +595,133 @@
 
 async function fetchReservations(headers) {
     try {
-        // Get all reservations for the tenant
-        const reservationsUrl = `https://management.azure.com/providers/Microsoft.Capacity/reservationOrders?api-version=2022-03-01`;
+        console.log('🎫 Fetching reservations...');
         
-        const reservationsResponse = await fetch(reservationsUrl, { headers });
+        // Try multiple approaches to get reservations
+        let reservations = [];
         
-        if (!reservationsResponse.ok) {
-            throw new Error(`Reservations API error: ${reservationsResponse.status} ${reservationsResponse.statusText}`);
+        // Approach 1: Get reservations scoped to subscription
+        try {
+            const subscriptionReservationsUrl = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Capacity/reservations?api-version=2022-03-01`;
+            const subResponse = await makeAzureApiCall(subscriptionReservationsUrl, headers);
+            
+            console.log(`📊 Found ${subResponse.value?.length || 0} subscription-scoped reservations`);
+            
+            for (const reservation of subResponse.value || []) {
+                const processed = processReservation(reservation);
+                if (processed) {
+                    reservations.push(processed);
+                }
+            }
+        } catch (error) {
+            console.warn('Subscription-scoped reservations failed:', error.message);
         }
         
-        const reservationsResult = await reservationsResponse.json();
-        const reservations = [];
-        
-        // Process each reservation order
-        for (const order of reservationsResult.value || []) {
-            if (order.properties?.reservations) {
-                for (const reservation of order.properties.reservations) {
-                    try {
-                        // Get detailed reservation info
-                        const detailUrl = `https://management.azure.com${reservation.id}?api-version=2022-03-01`;
-                        const detailResponse = await fetch(detailUrl, { headers });
-                        
-                        if (detailResponse.ok) {
-                            const detail = await detailResponse.json();
-                            const props = detail.properties;
-                            
-                            // Only include VM reservations that are active
-                            if (props?.sku?.name?.includes('VM') && 
-                                props?.provisioningState === 'Succeeded' &&
-                                props?.effectiveDateTime && 
-                                props?.expiryDateTime &&
-                                new Date(props.effectiveDateTime) <= new Date() &&
-                                new Date(props.expiryDateTime) > new Date()) {
+        // Approach 2: Get tenant-level reservation orders (if subscription approach didn't work)
+        if (reservations.length === 0) {
+            try {
+                const ordersUrl = `https://management.azure.com/providers/Microsoft.Capacity/reservationOrders?api-version=2022-03-01`;
+                const ordersResponse = await makeAzureApiCall(ordersUrl, headers);
+                
+                console.log(`📋 Found ${ordersResponse.value?.length || 0} reservation orders`);
+                
+                for (const order of ordersResponse.value || []) {
+                    // Get detailed reservations for each order
+                    if (order.properties?.reservations) {
+                        for (const reservationRef of order.properties.reservations) {
+                            try {
+                                const detailUrl = `https://management.azure.com${reservationRef.id}?api-version=2022-03-01`;
+                                const detail = await makeAzureApiCall(detailUrl, headers);
                                 
-                                reservations.push({
-                                    region: props.appliedScopeProperties?.displayName || props.location || 'Unknown',
-                                    vmSize: props.sku.name,
-                                    quantity: props.quantity || 1,
-                                    cost: calculateReservationCost(props),
-                                    term: props.term,
-                                    scope: props.appliedScopeType
-                                });
+                                const processed = processReservation(detail);
+                                if (processed) {
+                                    reservations.push(processed);
+                                }
+                            } catch (detailError) {
+                                console.warn(`Failed to get reservation detail for ${reservationRef.id}:`, detailError.message);
                             }
                         }
-                    } catch (detailError) {
-                        console.warn('Failed to fetch reservation detail:', detailError);
                     }
                 }
+            } catch (error) {
+                console.warn('Tenant-level reservations failed:', error.message);
             }
         }
         
+        console.log(`✅ Total processed reservations: ${reservations.length}`);
         return reservations;
         
     } catch (error) {
         console.error('Error fetching reservations:', error);
         throw new Error(`Failed to fetch reservations: ${error.message}`);
+    }
+}
+
+function processReservation(reservation) {
+    try {
+        const props = reservation.properties;
+        
+        // Log reservation details for debugging
+        console.log('🔍 Processing reservation:', {
+            sku: props?.sku?.name,
+            state: props?.provisioningState,
+            effective: props?.effectiveDateTime,
+            expiry: props?.expiryDateTime,
+            location: props?.location,
+            appliedScope: props?.appliedScopeType
+        });
+        
+        // More lenient filtering - include more reservation types
+        const isVMReservation = props?.sku?.name && (
+            props.sku.name.includes('VM') || 
+            props.sku.name.includes('Standard_') ||
+            props.sku.name.includes('Basic_')
+        );
+        
+        // Check if reservation is currently active (more flexible date checking)
+        const now = new Date();
+        const effectiveDate = props?.effectiveDateTime ? new Date(props.effectiveDateTime) : null;
+        const expiryDate = props?.expiryDateTime ? new Date(props.expiryDateTime) : null;
+        
+        const isActive = props?.provisioningState === 'Succeeded' &&
+                        (!effectiveDate || effectiveDate <= now) &&
+                        (!expiryDate || expiryDate > now);
+        
+        if (isVMReservation && isActive) {
+            // Try to extract region from various possible fields
+            let region = props?.location || 
+                        props?.appliedScopeProperties?.displayName || 
+                        props?.appliedScopeProperties?.resourceGroupName ||
+                        'Unknown';
+            
+            // Clean up region name
+            region = region.replace(/\s+/g, '').toLowerCase();
+            
+            const processed = {
+                region: region,
+                vmSize: props.sku.name,
+                quantity: props.quantity || 1,
+                cost: calculateReservationCost(props),
+                term: props.term || 'P1Y',
+                scope: props.appliedScopeType || 'Unknown',
+                id: reservation.id
+            };
+            
+            console.log('✅ Added reservation:', processed);
+            return processed;
+        } else {
+            console.log('⏭️ Skipped reservation:', {
+                isVM: isVMReservation,
+                isActive: isActive,
+                sku: props?.sku?.name
+            });
+        }
+        
+        return null;
+        
+    } catch (error) {
+        console.warn('Error processing reservation:', error);
+        return null;
     }
 }
 
@@ -660,42 +732,129 @@ async function fetchVMs(headers) {
         // Strategy 1: Try without instanceView expansion first (more reliable)
         let vmsData = await tryFetchVMsBasic(headers);
         
-        // Strategy 2: If basic fetch works, try to get power states separately
+        // If we got VMs, try to enrich with power states (but don't fail if this doesn't work)
         if (vmsData.length > 0) {
-            vmsData = await enrichWithPowerStates(vmsData, headers);
-        } else {
-            // Strategy 3: Try paginated approach for large subscriptions
+            console.log(`📊 Got ${vmsData.length} VMs, trying to get power states...`);
+            try {
+                const enrichedData = await enrichWithPowerStates(vmsData, headers);
+                if (enrichedData.length > 0) {
+                    vmsData = enrichedData;
+                    console.log('✅ Successfully enriched VMs with power states');
+                } else {
+                    console.log('⚠️ Power state enrichment failed, using all VMs as running');
+                }
+            } catch (error) {
+                console.warn('Power state enrichment failed, continuing with basic data:', error.message);
+                // Keep the basic data, just assume all VMs are running
+            }
+        }
+        
+        // Strategy 2: If basic fetch didn't work, try paginated approach
+        if (vmsData.length === 0) {
+            console.log('🔄 Basic fetch returned no VMs, trying paginated approach...');
             vmsData = await tryFetchVMsPaginated(headers);
         }
         
-        // Strategy 4: If all fails, try Resource Graph API (if available)
+        // Strategy 3: If paginated fails, try Resource Graph API
         if (vmsData.length === 0) {
+            console.log('🔄 Paginated fetch failed, trying Resource Graph API...');
             vmsData = await tryResourceGraphAPI(headers);
         }
         
-        const vmUsage = new Map();
+        if (vmsData.length === 0) {
+            console.warn('❌ All VM fetch strategies failed');
+            return [];
+        }
         
-        // Process VMs and group by region and size
+        console.log(`📊 Total VMs found: ${vmsData.length}`);
+        
+        // Process and group VMs by region and size
+        const vmUsage = new Map();
+        let runningCount = 0;
+        let totalCount = 0;
+        
         vmsData.forEach(vm => {
-            const region = vm.location;
+            totalCount++;
+            const region = normalizeRegion(vm.location);
             const vmSize = vm.vmSize;
             const isRunning = vm.isRunning;
             
-            if (region && vmSize && isRunning) {
+            // Debug logging for each VM
+            console.log(`🖥️ Processing: ${vm.name} | ${region} | ${vmSize} | Running: ${isRunning}`);
+            
+            if (region && vmSize) {
+                // Count ALL VMs, not just running ones (but track running separately)
+                if (isRunning) runningCount++;
+                
                 const key = `${region}-${vmSize}`;
-                const current = vmUsage.get(key) || { region, vmSize, quantity: 0 };
+                const current = vmUsage.get(key) || { region, vmSize, quantity: 0, runningQuantity: 0 };
                 current.quantity += 1;
+                if (isRunning) current.runningQuantity += 1;
                 vmUsage.set(key, current);
             }
         });
         
-        console.log(`✅ Successfully processed ${vmsData.length} VMs, ${vmUsage.size} unique region/size combinations`);
-        return Array.from(vmUsage.values());
+        console.log(`✅ Processed ${totalCount} VMs total, ${runningCount} running, ${vmUsage.size} unique region/size combinations`);
+        
+        // Convert to array and use total quantity (not just running)
+        const result = Array.from(vmUsage.values()).map(vm => ({
+            region: vm.region,
+            vmSize: vm.vmSize,
+            quantity: vm.quantity, // Use total VMs, not just running
+            runningQuantity: vm.runningQuantity
+        }));
+        
+        console.log('📋 Final VM summary:', result);
+        return result;
         
     } catch (error) {
         console.error('Error fetching VMs:', error);
         throw new Error(`Failed to fetch VMs: ${error.message}`);
     }
+}
+
+function normalizeRegion(location) {
+    if (!location) return 'Unknown';
+    
+    // Normalize region names to handle variations
+    const regionMap = {
+        'eastus': 'East US',
+        'eastus2': 'East US 2', 
+        'westus': 'West US',
+        'westus2': 'West US 2',
+        'westus3': 'West US 3',
+        'centralus': 'Central US',
+        'northcentralus': 'North Central US',
+        'southcentralus': 'South Central US',
+        'westcentralus': 'West Central US',
+        'canadacentral': 'Canada Central',
+        'canadaeast': 'Canada East',
+        'westeurope': 'West Europe',
+        'northeurope': 'North Europe',
+        'uksouth': 'UK South',
+        'ukwest': 'UK West',
+        'francecentral': 'France Central',
+        'germanywestcentral': 'Germany West Central',
+        'norwayeast': 'Norway East',
+        'switzerlandnorth': 'Switzerland North',
+        'swedencentral': 'Sweden Central',
+        'southeastasia': 'Southeast Asia',
+        'eastasia': 'East Asia',
+        'australiaeast': 'Australia East',
+        'australiasoutheast': 'Australia Southeast',
+        'japaneast': 'Japan East',
+        'japanwest': 'Japan West',
+        'koreacentral': 'Korea Central',
+        'koreasouth': 'Korea South',
+        'southindia': 'South India',
+        'centralindia': 'Central India',
+        'westindia': 'West India',
+        'brazilsouth': 'Brazil South',
+        'southafricanorth': 'South Africa North'
+    };
+    
+    const normalized = location.toLowerCase().replace(/\s+/g, '');
+    return regionMap[normalized] || location;
 }
 
 async function tryFetchVMsBasic(headers) {
@@ -705,13 +864,26 @@ async function tryFetchVMsBasic(headers) {
         
         const response = await makeAzureApiCall(vmsUrl, headers);
         
-        return (response.value || []).map(vm => ({
-            id: vm.id,
-            name: vm.name,
-            location: vm.location,
-            vmSize: vm.properties?.hardwareProfile?.vmSize,
-            isRunning: true // Assume running for basic fetch, will verify later
-        }));
+        const vms = (response.value || []).map(vm => {
+            console.log('🖥️ Found VM:', {
+                name: vm.name,
+                location: vm.location,
+                vmSize: vm.properties?.hardwareProfile?.vmSize,
+                resourceGroup: vm.id.split('/')[4]
+            });
+            
+            return {
+                id: vm.id,
+                name: vm.name,
+                location: vm.location,
+                vmSize: vm.properties?.hardwareProfile?.vmSize,
+                resourceGroup: vm.id.split('/')[4],
+                isRunning: true // Will verify later if possible
+            };
+        });
+        
+        console.log(`📊 Basic fetch found ${vms.length} VMs total`);
+        return vms;
         
     } catch (error) {
         console.warn('Basic VM fetch failed:', error.message);
@@ -720,28 +892,41 @@ async function tryFetchVMsBasic(headers) {
 }
 
 async function enrichWithPowerStates(vmsData, headers) {
-    console.log('🔋 Strategy 2: Enriching with power states...');
+    console.log(`🔋 Strategy 2: Enriching ${vmsData.length} VMs with power states...`);
     const enrichedVMs = [];
     
-    // Process VMs in batches to avoid overwhelming the API
-    const batchSize = 10;
+    // Process VMs in smaller batches to avoid rate limiting
+    const batchSize = 5;
+    let successCount = 0;
+    let runningCount = 0;
+    
     for (let i = 0; i < vmsData.length; i += batchSize) {
         const batch = vmsData.slice(i, i + batchSize);
+        console.log(`🔄 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(vmsData.length/batchSize)}`);
         
         const batchPromises = batch.map(async (vm) => {
             try {
                 const statusUrl = `${vm.id}/instanceView?api-version=2023-03-01`;
                 const statusResponse = await makeAzureApiCall(`https://management.azure.com${statusUrl}`, headers);
                 
-                const isRunning = statusResponse.statuses?.some(
-                    status => status.code === 'PowerState/running'
+                const powerState = statusResponse.statuses?.find(
+                    status => status.code?.startsWith('PowerState/')
                 );
                 
-                return { ...vm, isRunning };
+                const isRunning = powerState?.code === 'PowerState/running';
+                
+                console.log(`⚡ ${vm.name}: ${powerState?.code || 'unknown'}`);
+                
+                if (isRunning) runningCount++;
+                successCount++;
+                
+                return { ...vm, isRunning, powerState: powerState?.code };
                 
             } catch (error) {
-                console.warn(`Failed to get status for ${vm.name}, assuming running:`, error.message);
-                return { ...vm, isRunning: true }; // Conservative assumption
+                console.warn(`⚠️ Failed to get status for ${vm.name}: ${error.message}`);
+                // For VMs we can't check, assume they're running (conservative approach)
+                runningCount++;
+                return { ...vm, isRunning: true, powerState: 'assumed-running' };
             }
         });
         
@@ -754,10 +939,11 @@ async function enrichWithPowerStates(vmsData, headers) {
         
         // Rate limiting: wait between batches
         if (i + batchSize < vmsData.length) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
     }
     
+    console.log(`✅ Power state check complete: ${successCount}/${vmsData.length} VMs checked, ${runningCount} running`);
     return enrichedVMs;
 }
 
@@ -765,9 +951,13 @@ async function tryFetchVMsPaginated(headers) {
     try {
         console.log('📄 Strategy 3: Paginated VM fetch...');
         const allVMs = [];
-        let nextLink = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Compute/virtualMachines?api-version=2023-03-01&$top=50`;
+        let nextLink = `https://management.azure.com/subscriptions/${azureConfig.subscriptionId}/providers/Microsoft.Compute/virtualMachines?api-version=2023-03-01&$top=100`;
+        let pageCount = 0;
         
-        while (nextLink && allVMs.length < 1000) { // Safety limit
+        while (nextLink && allVMs.length < 2000 && pageCount < 20) { // Safety limits
+            pageCount++;
+            console.log(`📄 Fetching page ${pageCount}...`);
+            
             const response = await makeAzureApiCall(nextLink, headers);
             
             const vms = (response.value || []).map(vm => ({
@@ -775,18 +965,21 @@ async function tryFetchVMsPaginated(headers) {
                 name: vm.name,
                 location: vm.location,
                 vmSize: vm.properties?.hardwareProfile?.vmSize,
-                isRunning: true // Will verify separately if needed
+                resourceGroup: vm.id.split('/')[4],
+                isRunning: true // Conservative assumption for paginated fetch
             }));
             
+            console.log(`📊 Page ${pageCount}: ${vms.length} VMs`);
             allVMs.push(...vms);
             nextLink = response.nextLink;
             
             // Rate limiting between pages
             if (nextLink) {
-                await new Promise(resolve => setTimeout(resolve, 200));
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
         
+        console.log(`✅ Paginated fetch complete: ${allVMs.length} VMs across ${pageCount} pages`);
         return allVMs;
         
     } catch (error) {
@@ -800,14 +993,13 @@ async function tryResourceGraphAPI(headers) {
         console.log('🔍 Strategy 4: Trying Azure Resource Graph API...');
         
         const query = {
+            subscriptions: [azureConfig.subscriptionId],
             query: `
                 Resources
                 | where type == "microsoft.compute/virtualmachines"
-                | where subscriptionId == "${azureConfig.subscriptionId}"
                 | extend vmSize = properties.hardwareProfile.vmSize
-                | extend powerState = properties.extended.instanceView.powerState.code
-                | project name, location, vmSize, powerState
-                | where powerState == "PowerState/running" or isempty(powerState)
+                | extend powerState = tostring(properties.extended.instanceView.powerState.code)
+                | project name, location, vmSize, powerState, resourceGroup
             `
         };
         
@@ -823,12 +1015,26 @@ async function tryResourceGraphAPI(headers) {
         
         if (response.ok) {
             const result = await response.json();
-            return (result.data || []).map(row => ({
-                name: row[0],
-                location: row[1],
-                vmSize: row[2],
-                isRunning: !row[3] || row[3] === 'PowerState/running'
-            }));
+            const vms = (result.data || []).map(row => {
+                const [name, location, vmSize, powerState, resourceGroup] = row;
+                const isRunning = !powerState || powerState === 'PowerState/running' || powerState === 'running';
+                
+                console.log(`🔍 Resource Graph VM: ${name} (${powerState || 'unknown'})`);
+                
+                return {
+                    name,
+                    location,
+                    vmSize,
+                    resourceGroup,
+                    isRunning,
+                    powerState
+                };
+            });
+            
+            console.log(`✅ Resource Graph found ${vms.length} VMs`);
+            return vms;
+        } else {
+            console.warn(`Resource Graph API failed: ${response.status}`);
         }
         
     } catch (error) {
