@@ -81,7 +81,18 @@
         <button class="btn btn-secondary" id="btnSample">Load Sample Data</button>
         <label class="toggle"><input type="checkbox" id="familyMode" checked /> Use family (instance flexibility) where possible</label>
       </div>
-      <div id="authStatus" class="status info">Loading…</div>
+      <div class=\"config-grid\" style=\"margin-top:10px\">
+        <div class=\"input-group\">
+          <label for=\"scopeFilter\">Reservation scope filter</label>
+          <input type=\"text\" id=\"scopeFilter\" placeholder=\"e.g., Single subscription - Jonas Enterprise\" />
+          <div class=\"hint\">Exact match, case-insensitive. Leave blank to include all scopes.</div>
+        </div>
+        <div class=\"input-group\">
+          <label>&nbsp;</label>
+          <label class=\"toggle\"><input type=\"checkbox\" id=\"statusFilterSucceeded\" checked /> Succeeded reservations only</label>
+        </div>
+      </div>
+      <div id=\"authStatus\" class="status info">Loading…</div>
     </div>
 
     <div id="dashboard" class="dashboard">
@@ -269,21 +280,7 @@
 
         // 2) For each order, list Reservations and map reservationId -> region + sku
         const reservationMeta = new Map();
-        for (const orderId of orderIds) {
-          const reservations = await armGET(`/providers/Microsoft.Capacity/reservationOrders/${orderId}/reservations?api-version=${RESERVATION_API_VERSION}`);
-          (reservations.value || []).forEach(r => {
-            const region = (r.location || (r.properties && r.properties.location) || '').toLowerCase();
-            const skuName = (r.sku && r.sku.name) || (r.properties && r.properties.sku && r.properties.sku.name) || 'Unknown';
-            reservationMeta.set(r.name, { region, skuName, orderId });
-          });
-        }
-
-        // 3) Pull 30d Reservation Details per order (daily grain), aggregate avg used per reservationId
-        const end = new Date(); end.setUTCDate(end.getUTCDate() - 1); // yesterday for complete day
-        const start = new Date(end); start.setUTCDate(end.getUTCDate() - 29);
-        const filter = `properties/usageDate ge ${start.toISOString().split('T')[0]} AND properties/usageDate le ${end.toISOString().split('T')[0]}`;
-
-        const reservationsAgg = [];
+        const allowedResIds = new Set(reservationMeta.keys());
         for (const orderId of orderIds) {
           const details = await armGET(`/providers/Microsoft.Capacity/reservationorders/${orderId}/providers/Microsoft.Consumption/reservationDetails?$filter=${encodeURIComponent(filter)}&api-version=${CONSUMPTION_API_VERSION}`);
           const rows = details.value || [];
@@ -291,7 +288,7 @@
           const byRes = new Map();
           rows.forEach(item => {
             const p = item.properties || {}; const rid = p.reservationId?.split('/').pop();
-            if (!rid) return;
+            if (!rid || !allowedResIds.has(rid)) return;
             const entry = byRes.get(rid) || { usedHours: 0, days: 0, reservedQty: 0, skuName: p.skuName, ifg: p.instanceFlexibilityGroup };
             entry.usedHours += Number(p.usedHours || 0);
             entry.days += 1;
@@ -310,11 +307,18 @@
         showStatus('Querying Resource Graph for running VMs…', 'info');
         const subs = azureConfig.subscriptions; // can be empty => tenant scope (needs extra perms)
         const familyMode = document.getElementById('familyMode').checked;
+        const statusSucceededOnly = document.getElementById('statusFilterSucceeded')?.checked ?? true;
+        const scopeFilterText = (document.getElementById('scopeFilter')?.value || '').trim().toLowerCase();
 
         const kql = `Resources\n| where type =~ 'microsoft.compute/virtualmachines'\n| extend vmSize = tostring(properties.hardwareProfile.vmSize), state = tostring(properties.extended.instanceView.powerState.code)\n| where state =~ 'PowerState/running'\n| summarize running = count() by region = tolower(location), vmSize`;
 
+        let targetSubs = subs;
+        if ((!targetSubs || !targetSubs.length) && scopeFilterText) {
+          const pick = Array.from(new Set(Array.from(reservationMeta.values()).map(x => x.scopeSubId).filter(Boolean)));
+          if (pick.length) targetSubs = pick;
+        }
         const argBody = { query: kql };
-        if (subs && subs.length) argBody.subscriptions = subs;
+        if (targetSubs && targetSubs.length) argBody.subscriptions = targetSubs;
         const arg = await armPOST(`/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`, argBody);
         const runningNow = (arg.data || []).map(r => ({ region: String(r[0]).toLowerCase(), skuName: String(r[1]), running: Number(r[2]) }));
 
