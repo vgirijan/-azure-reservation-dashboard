@@ -104,7 +104,7 @@
         </div>
         <div class="metric-card">
           <div class="metric-value" id="activeVMs">-</div>
-          <div class="metric-label">Running VMs (now)</div>
+          <div class=\"metric-label\">VMs in scope</div>
           <div class="metric-trend" id="vmTrend">Resource Graph</div>
         </div>
         <div class="metric-card">
@@ -138,7 +138,7 @@
               <th>SKU / Size</th>
               <th>Reserved</th>
               <th>Avg Used (30d)</th>
-              <th>Running Now</th>
+              <th>Count in Scope</th>
               <th>Gap vs Now</th>
               <th>Recommendation</th>
             </tr>
@@ -341,16 +341,16 @@
         }
 
         // 4) Get current running VMs by size+region via Resource Graph
-        showStatus('Querying Resource Graph for running VMs…', 'info');
+        showStatus('Querying Resource Graph for VMs…', 'info');
         const subs = azureConfig.subscriptions; // can be empty => tenant scope (needs extra perms)
 
-        const kql = `Resources\n| where type =~ 'microsoft.compute/virtualmachines'\n| extend vmSize = tostring(properties.hardwareProfile.vmSize), state = tostring(properties.extended.instanceView.powerState.code)\n| where state =~ 'PowerState/running'\n| summarize running = count() by region = tolower(location), vmSize`;
+        const kql = `Resources
+| where type =~ 'microsoft.compute/virtualmachines'
+| extend vmSize = tostring(properties.hardwareProfile.vmSize)
+| summarize running = count() by region = tolower(location), vmSize`;
 
         let targetSubs = subs;
-        if ((!targetSubs || !targetSubs.length) && scopeFilterText) {
-          const pick = Array.from(new Set(Array.from(reservationMeta.values()).map(x => x.scopeSubId).filter(Boolean)));
-          if (pick.length) targetSubs = pick;
-        }
+        const pick = Array.from(new Set(Array.from(reservationMeta.values()).map(x => x.scopeSubId).filter(Boolean))); if (pick.length) targetSubs = pick;
         const argBody = { query: kql };
         if (targetSubs && targetSubs.length) argBody.subscriptions = targetSubs;
         const arg = await armPOST(`/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`, argBody);
